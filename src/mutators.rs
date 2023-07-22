@@ -57,12 +57,14 @@ where
         }
 
         let puzzle = state.metadata::<InitialPuzzleMetadata>()?.initial().clone();
-        let current = input
+        let Ok(current) = input
             .moves()
             .iter()
             .cloned()
             .try_fold(puzzle, |puzzle, dir| puzzle.move_player(dir))
-            .expect("Input provided was not valid.");
+        else {
+            return Ok(MutationResult::Skipped); // this input will fail :(
+        };
 
         // first, find the crates in the current puzzle state
         let crates = util::find_crates(&current);
@@ -107,12 +109,14 @@ where
         }
 
         let puzzle = state.metadata::<InitialPuzzleMetadata>()?.initial().clone();
-        let current = input
+        let Ok(current) = input
             .moves()
             .iter()
             .cloned()
             .try_fold(puzzle, |puzzle, dir| puzzle.move_player(dir))
-            .expect("Input provided was not valid.");
+        else {
+            return Ok(MutationResult::Skipped); // this input will fail :(
+        };
 
         // first, find the crates in the current puzzle state
         let mut crates = util::find_crates(&current);
