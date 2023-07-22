@@ -1,17 +1,16 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback};
 use crate::input::SokobanInput;
-use crate::mutators::{
-    AddMoveMutator, MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferenceMutator,
-};
+use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferenceMutator};
 use crate::observer::SokobanStateObserver;
 use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
-use libafl::events::SimpleEventManager;
+use libafl::events::Event::UpdateUserStats;
+use libafl::events::{EventFirer, SimpleEventManager};
 use libafl::feedbacks::NewHashFeedback;
-#[cfg(not(feature = "printing"))]
-use libafl::monitors::SimpleMonitor;
-use libafl::prelude::{feedback_and_fast, tuple_list, RandomSeed, StdRand};
+use libafl::monitors::UserStats;
+use libafl::mutators::StdScheduledMutator;
+use libafl::prelude::{feedback_and_fast, tuple_list, MultiMonitor, RandomSeed, StdRand};
 use libafl::schedulers::QueueScheduler;
 use libafl::stages::StdMutationalStage;
 use libafl::state::{HasMetadata, HasSolutions, StdState};
@@ -81,21 +80,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let puzzle = SokobanState::from(response);
 
         println!("level {level}");
-        fuzz(puzzle)?;
+        fuzz(level, puzzle)?;
     }
 
     Ok(())
 }
 
-fn fuzz(puzzle: SokobanState) -> Result<(), Error> {
+fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
     println!("starting state: {:?}", puzzle);
 
     #[cfg(feature = "printing")]
-    let mut mgr = SimpleEventManager::printing();
+    let print_fn = |s| println!("{s}");
     #[cfg(not(feature = "printing"))]
-    let mut mgr = SimpleEventManager::new(SimpleMonitor::new(|_| {}));
+    let print_fn = |_| {};
+    let monitor = MultiMonitor::new(print_fn);
 
-    let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
+    let mut mgr = SimpleEventManager::new(monitor);
+
+    let sokoban_obs = SokobanStateObserver::new("sokoban_state", false);
     let mut feedback = feedback_and_fast!(
         SokobanSolvableFeedback::new(&sokoban_obs),
         NewHashFeedback::new(&sokoban_obs)
@@ -126,14 +128,25 @@ fn fuzz(puzzle: SokobanState) -> Result<(), Error> {
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutator = RandomPreferenceMutator::new(tuple_list!(
-        AddMoveMutator,
-        MoveCrateMutator,
-        MoveCrateToTargetMutator
-    ));
+    let mutator = StdScheduledMutator::with_max_stack_pow(
+        tuple_list!(RandomPreferenceMutator::new(tuple_list!(
+            MoveCrateMutator,
+            MoveCrateToTargetMutator
+        ))),
+        2,
+    );
     let mutational_stage = StdMutationalStage::transforming(mutator);
 
     let mut stages = tuple_list!(mutational_stage);
+
+    mgr.fire(
+        &mut state,
+        UpdateUserStats {
+            name: "level".to_string(),
+            value: UserStats::Number(level),
+            phantom: Default::default(),
+        },
+    )?;
 
     while state.solutions().is_empty() {
         fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr)?;

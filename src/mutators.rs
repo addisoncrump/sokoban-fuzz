@@ -6,6 +6,8 @@ use libafl::mutators::{MutationResult, Mutator, MutatorsTuple};
 use libafl::prelude::{CorpusId, MutationId, Named, Rand};
 use libafl::state::{HasCorpus, HasMaxSize, HasMetadata, HasRand};
 use libafl::Error;
+use rand::seq::SliceRandom;
+use rand::RngCore;
 use sokoban::error::SokobanError::{InvalidMoveCrate, InvalidMoveOOB, InvalidMoveWall};
 use sokoban::Tile;
 use std::collections::HashSet;
@@ -70,6 +72,7 @@ const MAX_TRIES: usize = 16;
 impl<S> Mutator<HallucinatedSokobanInput, S> for MoveCrateMutator
 where
     S: HasMaxSize + HasMetadata + HasRand,
+    S::Rand: RngCore,
 {
     fn mutate(
         &mut self,
@@ -88,24 +91,29 @@ where
         }
 
         // first, find the crates in the current puzzle state
-        let crates = util::find_crates(&current);
+        let mut crates = util::find_crates(&current);
+        crates.shuffle(state.rand_mut());
+        let mut possible_moves = POSSIBLE_MOVES.clone();
+        possible_moves.shuffle(state.rand_mut());
 
         // try to move a random crate in a random direction
-        for _ in 0..MAX_TRIES {
-            let target = *state.rand_mut().choose(&crates);
-            let direction = state.rand_mut().choose(POSSIBLE_MOVES);
-            if let Some(destination) = opposite(direction).go(target) {
-                if let Some(moves) = util::go_to(current.player(), destination, &current) {
-                    input.hallucinated_mut().replace(
-                        moves
-                            .iter()
-                            .copied()
-                            .try_fold(current, |current, direction| current.move_player(direction))
-                            .unwrap(),
-                    );
-                    input.moves_mut().extend(moves);
-                    input.moves_mut().push(direction);
-                    return Ok(MutationResult::Mutated);
+        for target in crates {
+            for direction in possible_moves {
+                if let Some(destination) = opposite(direction).go(target) {
+                    if let Some(moves) = util::go_to(current.player(), destination, &current) {
+                        input.hallucinated_mut().replace(
+                            moves
+                                .iter()
+                                .copied()
+                                .try_fold(current, |current, direction| {
+                                    current.move_player(direction)
+                                })
+                                .unwrap(),
+                        );
+                        input.moves_mut().extend(moves);
+                        input.moves_mut().push(direction);
+                        return Ok(MutationResult::Mutated);
+                    }
                 }
             }
         }

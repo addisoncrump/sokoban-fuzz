@@ -68,10 +68,7 @@ pub fn go_to(
 
         let mut prev_moves = HashMap::new();
         prev_moves.insert(start, None);
-        let mut new_moves = Vec::new();
-
-        // initialize the search
-        explore_local(start, destination, puzzle, &mut prev_moves, &mut new_moves);
+        let mut new_moves = vec![start];
 
         while !new_moves.is_empty() {
             let mut last_moves = Vec::new();
@@ -112,10 +109,7 @@ pub fn can_go_to(
 
         let mut prev_moves = HashMap::new();
         prev_moves.insert(start, None);
-        let mut new_moves = Vec::new();
-
-        // initialize the search
-        explore_local(start, destination, puzzle, &mut prev_moves, &mut new_moves);
+        let mut new_moves = vec![start];
 
         while !new_moves.is_empty() {
             let mut last_moves = Vec::new();
@@ -197,25 +191,17 @@ pub fn push_to(
 
         let mut prev_moves = HashMap::new();
         prev_moves.insert(start, None);
-        let mut new_moves = Vec::new();
-
-        // initialize the search
-        push_local(
-            puzzle.player(),
-            start,
-            destination,
-            &mut hallucinated,
-            &mut prev_moves,
-            &mut new_moves,
-        );
+        let mut new_moves = vec![start];
 
         while !new_moves.is_empty() {
             let mut last_moves = Vec::new();
             core::mem::swap(&mut new_moves, &mut last_moves);
             for prev in last_moves {
-                let player = opposite(prev_moves.get(&prev).unwrap().unwrap())
-                    .go(prev)
-                    .unwrap();
+                let player = prev_moves
+                    .get(&prev)
+                    .unwrap()
+                    .map(|direction| opposite(direction).go(prev).unwrap())
+                    .unwrap_or(puzzle.player());
                 if push_local(
                     player,
                     prev,

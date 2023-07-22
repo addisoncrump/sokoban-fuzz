@@ -9,7 +9,8 @@ edition = "2021"
 printing = []
 
 [dependencies]
-libafl = { git = "https://github.com/AFLplusplus/LibAFL.git" }
+libafl = { git = "https://github.com/AFLplusplus/LibAFL.git", features = ["rand_trait"] }
+rand = "0.8.5"
 reqwest = { version = "0.11", features = ["blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.5.1"
