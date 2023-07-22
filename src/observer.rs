@@ -10,6 +10,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SokobanStateObserver {
     last_state: Option<SokobanState>,
+    include_player: bool,
     name: String,
 }
 
@@ -20,9 +21,10 @@ impl Named for SokobanStateObserver {
 }
 
 impl SokobanStateObserver {
-    pub fn new(name: &str) -> Self {
+    pub fn new(name: &str, include_player: bool) -> Self {
         Self {
             last_state: None,
+            include_player,
             name: name.to_string(),
         }
     }
@@ -58,7 +60,9 @@ impl ObserverWithHashField for SokobanStateObserver {
             for item in state.iter().filter(|item| item.tile() == Tile::Crate) {
                 item.position().hash(&mut hasher);
             }
-            state.player().hash(&mut hasher);
+            if self.include_player {
+                state.player().hash(&mut hasher);
+            }
             hasher.finish()
         })
     }

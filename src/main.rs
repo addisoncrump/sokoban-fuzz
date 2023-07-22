@@ -1,15 +1,16 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::SokobanSolvedFeedback;
 use crate::input::SokobanInput;
-use crate::mutators::AddMoveMutator;
+use crate::mutators::{AddMoveMutator, MoveCrateMutator};
 use crate::observer::SokobanStateObserver;
+use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
 use libafl::events::SimpleEventManager;
 use libafl::feedbacks::NewHashFeedback;
 use libafl::prelude::{tuple_list, RandomSeed, StdRand};
 use libafl::schedulers::QueueScheduler;
 use libafl::stages::StdMutationalStage;
-use libafl::state::{HasSolutions, StdState};
+use libafl::state::{HasMetadata, HasSolutions, StdState};
 use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
 use sokoban::State as SokobanState;
 
@@ -18,6 +19,7 @@ mod feedback;
 mod input;
 mod mutators;
 mod observer;
+mod state;
 
 fn main() -> Result<(), Error> {
     let puzzle = SokobanState::parse(
@@ -48,7 +50,7 @@ fn main() -> Result<(), Error> {
 
     let mut mgr = SimpleEventManager::printing();
 
-    let sokoban_obs = SokobanStateObserver::new("sokoban_state");
+    let sokoban_obs = SokobanStateObserver::new("sokoban_state", false);
     let mut feedback = NewHashFeedback::new(&sokoban_obs);
     let mut objective = SokobanSolvedFeedback::new(&sokoban_obs);
 
@@ -63,6 +65,8 @@ fn main() -> Result<(), Error> {
         &mut objective,
     )?;
 
+    state.add_metadata(InitialPuzzleMetadata::new(puzzle.clone()));
+
     let scheduler = QueueScheduler::new();
 
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -74,7 +78,7 @@ fn main() -> Result<(), Error> {
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutational_stage = StdMutationalStage::new(AddMoveMutator);
+    let mutational_stage = StdMutationalStage::new(MoveCrateMutator);
 
     let mut stages = tuple_list!(mutational_stage);
 
