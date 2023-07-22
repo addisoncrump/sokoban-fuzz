@@ -1,7 +1,7 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::SokobanSolvedFeedback;
 use crate::input::SokobanInput;
-use crate::mutators::{AddMoveMutator, MoveCrateMutator};
+use crate::mutators::MoveCrateMutator;
 use crate::observer::SokobanStateObserver;
 use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
@@ -20,13 +20,14 @@ mod input;
 mod mutators;
 mod observer;
 mod state;
+mod util;
 
 fn main() -> Result<(), Error> {
     let puzzle = SokobanState::parse(
         &br#"
 ####################
 #__________________#
-#__________________#
+#__m_______________#
 #______________m___#
 #_____________x____#
 #__________________#
@@ -39,7 +40,7 @@ fn main() -> Result<(), Error> {
 #__________________#
 #__________________#
 #__________________#
-#__________________#
+#____________._____#
 #__________________#
 #__________________#
 #__________________#
