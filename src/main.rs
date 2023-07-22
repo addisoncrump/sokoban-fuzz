@@ -1,14 +1,16 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback};
 use crate::input::SokobanInput;
-use crate::mutators::{AddMoveMutator, MoveCrateMutator, MoveCrateToTargetMutator};
+use crate::mutators::{
+    AddMoveMutator, MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferenceMutator,
+};
 use crate::observer::SokobanStateObserver;
 use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
 use libafl::events::SimpleEventManager;
 use libafl::feedbacks::NewHashFeedback;
+#[cfg(not(feature = "printing"))]
 use libafl::monitors::SimpleMonitor;
-use libafl::mutators::StdScheduledMutator;
 use libafl::prelude::{feedback_and_fast, tuple_list, RandomSeed, StdRand};
 use libafl::schedulers::QueueScheduler;
 use libafl::stages::StdMutationalStage;
@@ -88,7 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn fuzz(puzzle: SokobanState) -> Result<(), Error> {
     println!("starting state: {:?}", puzzle);
 
+    #[cfg(feature = "printing")]
     let mut mgr = SimpleEventManager::printing();
+    #[cfg(not(feature = "printing"))]
+    let mut mgr = SimpleEventManager::new(SimpleMonitor::new(|_| {}));
 
     let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
     let mut feedback = feedback_and_fast!(
@@ -121,19 +126,12 @@ fn fuzz(puzzle: SokobanState) -> Result<(), Error> {
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutator = StdScheduledMutator::with_max_stack_pow(
-        tuple_list!(
-            AddMoveMutator,
-            MoveCrateMutator,
-            MoveCrateMutator,
-            MoveCrateToTargetMutator,
-            MoveCrateToTargetMutator,
-            MoveCrateToTargetMutator,
-            MoveCrateToTargetMutator
-        ),
-        1,
-    );
-    let mutational_stage = StdMutationalStage::new(mutator);
+    let mutator = RandomPreferenceMutator::new(tuple_list!(
+        AddMoveMutator,
+        MoveCrateMutator,
+        MoveCrateToTargetMutator
+    ));
+    let mutational_stage = StdMutationalStage::transforming(mutator);
 
     let mut stages = tuple_list!(mutational_stage);
 
