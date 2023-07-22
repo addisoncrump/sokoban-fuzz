@@ -83,10 +83,12 @@ fn main() -> Result<(), Error> {
     let mutator = StdScheduledMutator::with_max_stack_pow(
         tuple_list!(
             MoveCrateMutator,
+            MoveCrateMutator,
+            MoveCrateMutator,
             MoveCrateToTargetMutator,
             MoveCrateToTargetMutator
         ),
-        2,
+        1,
     );
     let mutational_stage = StdMutationalStage::new(mutator);
 
