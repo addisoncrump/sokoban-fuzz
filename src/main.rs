@@ -1,12 +1,13 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::SokobanSolvedFeedback;
 use crate::input::SokobanInput;
-use crate::mutators::MoveCrateMutator;
+use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator};
 use crate::observer::SokobanStateObserver;
 use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
 use libafl::events::SimpleEventManager;
 use libafl::feedbacks::NewHashFeedback;
+use libafl::mutators::StdScheduledMutator;
 use libafl::prelude::{tuple_list, RandomSeed, StdRand};
 use libafl::schedulers::QueueScheduler;
 use libafl::stages::StdMutationalStage;
@@ -79,7 +80,15 @@ fn main() -> Result<(), Error> {
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutational_stage = StdMutationalStage::new(MoveCrateMutator);
+    let mutator = StdScheduledMutator::with_max_stack_pow(
+        tuple_list!(
+            MoveCrateMutator,
+            MoveCrateToTargetMutator,
+            MoveCrateToTargetMutator
+        ),
+        2,
+    );
+    let mutational_stage = StdMutationalStage::new(mutator);
 
     let mut stages = tuple_list!(mutational_stage);
 
