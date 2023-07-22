@@ -1,19 +1,22 @@
 use crate::executor::SokobanExecutor;
-use crate::feedback::SokobanSolvedFeedback;
+use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback};
 use crate::input::SokobanInput;
-use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator};
+use crate::mutators::{AddMoveMutator, MoveCrateMutator, MoveCrateToTargetMutator};
 use crate::observer::SokobanStateObserver;
 use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
 use libafl::events::SimpleEventManager;
 use libafl::feedbacks::NewHashFeedback;
+use libafl::monitors::SimpleMonitor;
 use libafl::mutators::StdScheduledMutator;
-use libafl::prelude::{tuple_list, RandomSeed, StdRand};
+use libafl::prelude::{feedback_and_fast, tuple_list, RandomSeed, StdRand};
 use libafl::schedulers::QueueScheduler;
 use libafl::stages::StdMutationalStage;
 use libafl::state::{HasMetadata, HasSolutions, StdState};
 use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
-use sokoban::State as SokobanState;
+use serde::{Deserialize, Serialize};
+use serde_xml_rs::from_str;
+use sokoban::{State as SokobanState, Tile};
 
 mod executor;
 mod feedback;
@@ -23,37 +26,75 @@ mod observer;
 mod state;
 mod util;
 
-fn main() -> Result<(), Error> {
-    let puzzle = SokobanState::parse(
-        &br#"
-####################
-#__________________#
-#__m_______________#
-#_________.____m___#
-#_____________x____#
-#______m___________#
-#__________________#
-#__________________#
-#__________________#
-#___________.______#
-#__________________#
-#____._____________#
-#______________m___#
-#__________________#
-#__________________#
-#____________._____#
-#__________________#
-#__________________#
-#__________________#
-####################
-"#[..],
-    )
-    .unwrap();
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+struct Response {
+    deal: String,
+}
+
+impl From<Response> for SokobanState {
+    fn from(resp: Response) -> Self {
+        let dim_r = 12;
+        let dim_c = 18;
+        let container = resp
+            .deal
+            .chars()
+            .map(|c| match c {
+                'w' => Tile::Wall,
+                'e' | 'E' | 'm' | 'M' => Tile::Floor,
+                'o' | 'O' => Tile::Crate,
+                _ => unreachable!("Illegal value in response."),
+            })
+            .collect::<Vec<_>>();
+        let player = resp
+            .deal
+            .char_indices()
+            .find(|(_, c)| *c == 'm' || *c == 'M')
+            .expect("Couldn't find the player")
+            .0;
+
+        let player = (player / dim_c, player % dim_c);
+        let targets = resp
+            .deal
+            .char_indices()
+            .filter_map(|(i, c)| c.is_ascii_uppercase().then(|| i))
+            .map(|i| (i / dim_c, i % dim_c))
+            .collect::<Vec<_>>();
+        SokobanState::new(container, player, targets, dim_r, dim_c)
+            .expect("Expected a valid state from remote")
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let seed = 0;
+
+    for level in 1..100 {
+        let response: Response = from_str(
+            &reqwest::blocking::get(format!(
+                "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
+                seed, level
+            ))?
+            .text()?,
+        )?;
+
+        let puzzle = SokobanState::from(response);
+
+        println!("level {level}");
+        fuzz(puzzle)?;
+    }
+
+    Ok(())
+}
+
+fn fuzz(puzzle: SokobanState) -> Result<(), Error> {
+    println!("starting state: {:?}", puzzle);
 
     let mut mgr = SimpleEventManager::printing();
 
-    let sokoban_obs = SokobanStateObserver::new("sokoban_state", false);
-    let mut feedback = NewHashFeedback::new(&sokoban_obs);
+    let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
+    let mut feedback = feedback_and_fast!(
+        SokobanSolvableFeedback::new(&sokoban_obs),
+        NewHashFeedback::new(&sokoban_obs)
+    );
     let mut objective = SokobanSolvedFeedback::new(&sokoban_obs);
 
     let observers = tuple_list!(sokoban_obs);
@@ -82,9 +123,11 @@ fn main() -> Result<(), Error> {
 
     let mutator = StdScheduledMutator::with_max_stack_pow(
         tuple_list!(
+            AddMoveMutator,
             MoveCrateMutator,
             MoveCrateMutator,
-            MoveCrateMutator,
+            MoveCrateToTargetMutator,
+            MoveCrateToTargetMutator,
             MoveCrateToTargetMutator,
             MoveCrateToTargetMutator
         ),
@@ -110,7 +153,6 @@ fn main() -> Result<(), Error> {
         })
         .unwrap();
 
-    println!("starting state: {:?}", puzzle);
     println!("moves: {:?}", input.moves());
     println!("final state: {:?}", final_state);
 

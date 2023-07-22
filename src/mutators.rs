@@ -7,9 +7,15 @@ use libafl::prelude::{Named, Rand};
 use libafl::state::{HasMaxSize, HasMetadata, HasRand};
 use libafl::Error;
 use sokoban::Tile;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 pub struct AddMoveMutator;
+
+impl Named for AddMoveMutator {
+    fn name(&self) -> &str {
+        "move"
+    }
+}
 
 impl<S> Mutator<SokobanInput, S> for AddMoveMutator
 where
@@ -36,7 +42,7 @@ pub struct MoveCrateMutator;
 
 impl Named for MoveCrateMutator {
     fn name(&self) -> &str {
-        "move"
+        "move_crate"
     }
 }
 
@@ -90,7 +96,7 @@ pub struct MoveCrateToTargetMutator;
 
 impl Named for MoveCrateToTargetMutator {
     fn name(&self) -> &str {
-        "move_to_target"
+        "move_crate_to_target"
     }
 }
 
@@ -119,7 +125,7 @@ where
         };
 
         // first, find the crates in the current puzzle state
-        let mut crates = util::find_crates(&current);
+        let crates = util::find_crates(&current);
 
         // find the targets which are not occupied by crates
         let targets = current

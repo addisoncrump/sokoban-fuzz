@@ -213,7 +213,9 @@ pub fn push_to(
             let mut last_moves = Vec::new();
             core::mem::swap(&mut new_moves, &mut last_moves);
             for prev in last_moves {
-                let player = prev_moves.get(&prev).unwrap().unwrap().go(prev).unwrap();
+                let player = opposite(prev_moves.get(&prev).unwrap().unwrap())
+                    .go(prev)
+                    .unwrap();
                 if push_local(
                     player,
                     prev,
@@ -235,7 +237,7 @@ pub fn push_to(
                     let mut assembled = Vec::new();
                     let mut last_executed = 0;
                     let mut last_position = start;
-                    for next_move in crate_moves {
+                    for &next_move in crate_moves.iter() {
                         // execute the player moves that we haven't done yet
                         hallucinated = assembled[last_executed..]
                             .iter()
@@ -246,14 +248,16 @@ pub fn push_to(
                         last_executed = assembled.len();
 
                         // queue the moves to get the player to the push point
-                        assembled.extend(
-                            go_to(
-                                hallucinated.player(),
-                                opposite(next_move).go(last_position).unwrap(),
-                                &hallucinated,
-                            )
-                            .unwrap(),
-                        );
+                        if let Some(path) = go_to(
+                            hallucinated.player(),
+                            opposite(next_move).go(last_position).unwrap(),
+                            &hallucinated,
+                        ) {
+                            assembled.extend(path);
+                        } else {
+                            eprintln!("while attempting to apply {crate_moves:?} to {puzzle:?}");
+                            panic!("unable to queue movement {next_move:?} for box at {last_position:?}: {hallucinated:?} (player at {:?})", hallucinated.player());
+                        }
                         // queue the moves to push the box
                         assembled.push(next_move);
                         last_position = next_move.go(last_position).unwrap();
