@@ -8,4 +8,4 @@ edition = "2021"
 [dependencies]
 libafl = { git = "https://github.com/AFLplusplus/LibAFL.git" }
 serde = { version = "1.0", features = ["derive"] }
-sokoban = { path = "../sokoban", features = ["serde"] }
+sokoban = { version = "0.2.2", features = ["serde"] }
