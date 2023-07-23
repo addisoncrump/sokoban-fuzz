@@ -1,16 +1,14 @@
 use crate::input::HallucinatedSokobanInput;
 use crate::util;
 use crate::util::{opposite, push_to, POSSIBLE_MOVES};
-use libafl::corpus::Corpus;
 use libafl::mutators::{MutationResult, Mutator, MutatorsTuple};
-use libafl::prelude::{CorpusId, MutationId, Named, Rand};
+use libafl::prelude::{MutationId, Named, Rand};
 use libafl::state::{HasCorpus, HasMaxSize, HasMetadata, HasRand};
 use libafl::Error;
 use rand::seq::SliceRandom;
 use rand::RngCore;
 use sokoban::error::SokobanError::{InvalidMoveCrate, InvalidMoveOOB, InvalidMoveWall};
 use sokoban::Tile;
-use std::collections::HashSet;
 
 pub struct AddMoveMutator;
 
@@ -93,7 +91,7 @@ where
         // first, find the crates in the current puzzle state
         let mut crates = util::find_crates(&current);
         crates.shuffle(state.rand_mut());
-        let mut possible_moves = POSSIBLE_MOVES.clone();
+        let mut possible_moves = POSSIBLE_MOVES;
         possible_moves.shuffle(state.rand_mut());
 
         // try to move a random crate in a random direction
@@ -203,7 +201,6 @@ pub struct RandomPreferenceMutator<MT> {
     weights: Vec<MutationId>,
     total_weight: usize,
     until_reweight: usize,
-    last_id: CorpusId,
 }
 
 impl<MT> Named for RandomPreferenceMutator<MT> {
@@ -219,7 +216,6 @@ impl<MT> RandomPreferenceMutator<MT> {
             weights: Vec::new(),
             total_weight: 0,
             until_reweight: 0,
-            last_id: CorpusId::from(0u64),
         }
     }
 }

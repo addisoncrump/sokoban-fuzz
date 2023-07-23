@@ -10,10 +10,10 @@ use libafl::events::Event::UpdateUserStats;
 use libafl::events::{EventFirer, SimpleEventManager};
 use libafl::feedbacks::NewHashFeedback;
 use libafl::monitors::UserStats;
-use libafl::mutators::{TuneableScheduledMutator, TuneableScheduledMutatorMetadata};
+
 use libafl::prelude::{feedback_and_fast, tuple_list, MultiMonitor, RandomSeed, StdRand};
 use libafl::stages::StdMutationalStage;
-use libafl::state::{HasExecutions, HasMetadata, HasSolutions, StdState};
+use libafl::state::{HasMetadata, HasSolutions, StdState};
 use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
 use serde::{Deserialize, Serialize};
 use serde_xml_rs::from_str;
