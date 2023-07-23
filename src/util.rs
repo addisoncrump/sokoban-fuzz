@@ -1,7 +1,8 @@
 use sokoban::Direction::{Down, Left, Right, Up};
 use sokoban::{Direction, State as SokobanState, Tile};
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 
 pub static POSSIBLE_MOVES: [Direction; 4] = [Up, Down, Left, Right];
 
@@ -255,6 +256,17 @@ pub fn push_to(
         }
     }
     None
+}
+
+pub fn hash_sokoban_state(state: &SokobanState, include_player: bool) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for item in state.iter().filter(|item| item.tile() == Tile::Crate) {
+        item.position().hash(&mut hasher);
+    }
+    if include_player {
+        state.player().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[cfg(test)]

@@ -192,7 +192,7 @@ where
     }
 }
 
-const WEIGHT_PRECISION: u64 = 128;
+const WEIGHT_PRECISION: u64 = 64;
 
 pub struct RandomPreferenceMutator<MT> {
     mutators: MT,
@@ -241,11 +241,7 @@ where
                     .extend(std::iter::repeat(MutationId::from(i)).take(amount));
                 self.total_weight += amount;
             }
-        } else if state
-            .corpus()
-            .current()
-            .map_or(false, |id| id != self.last_id)
-        {
+        } else {
             self.until_reweight -= 1;
         }
 

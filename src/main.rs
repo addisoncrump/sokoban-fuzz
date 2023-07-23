@@ -3,15 +3,14 @@ use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback};
 use crate::input::SokobanInput;
 use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferenceMutator};
 use crate::observer::SokobanStateObserver;
+use crate::scheduler::SokobanWeightScheduler;
 use crate::state::InitialPuzzleMetadata;
 use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
 use libafl::events::Event::UpdateUserStats;
 use libafl::events::{EventFirer, SimpleEventManager};
 use libafl::feedbacks::NewHashFeedback;
 use libafl::monitors::UserStats;
-use libafl::mutators::StdScheduledMutator;
 use libafl::prelude::{feedback_and_fast, tuple_list, MultiMonitor, RandomSeed, StdRand};
-use libafl::schedulers::QueueScheduler;
 use libafl::stages::StdMutationalStage;
 use libafl::state::{HasMetadata, HasSolutions, StdState};
 use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
@@ -24,6 +23,7 @@ mod feedback;
 mod input;
 mod mutators;
 mod observer;
+mod scheduler;
 mod state;
 mod util;
 
@@ -57,7 +57,7 @@ impl From<Response> for SokobanState {
         let targets = resp
             .deal
             .char_indices()
-            .filter_map(|(i, c)| c.is_ascii_uppercase().then(|| i))
+            .filter_map(|(i, c)| c.is_ascii_uppercase().then_some(i))
             .map(|i| (i / dim_c, i % dim_c))
             .collect::<Vec<_>>();
         SokobanState::new(container, player, targets, dim_r, dim_c)
@@ -117,7 +117,7 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
 
     state.add_metadata(InitialPuzzleMetadata::new(puzzle.clone()));
 
-    let scheduler = QueueScheduler::new();
+    let scheduler = SokobanWeightScheduler::new();
 
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
@@ -128,13 +128,8 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutator = StdScheduledMutator::with_max_stack_pow(
-        tuple_list!(RandomPreferenceMutator::new(tuple_list!(
-            MoveCrateMutator,
-            MoveCrateToTargetMutator
-        ))),
-        2,
-    );
+    let mutator =
+        RandomPreferenceMutator::new(tuple_list!(MoveCrateMutator, MoveCrateToTargetMutator));
     let mutational_stage = StdMutationalStage::transforming(mutator);
 
     let mut stages = tuple_list!(mutational_stage);

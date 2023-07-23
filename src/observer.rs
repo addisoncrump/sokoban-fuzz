@@ -1,11 +1,10 @@
+use crate::util::hash_sokoban_state;
 use libafl::inputs::UsesInput;
 use libafl::observers::{Observer, ObserverWithHashField};
 use libafl::prelude::Named;
 use libafl::Error;
 use serde::{Deserialize, Serialize};
-use sokoban::{State as SokobanState, Tile};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sokoban::State as SokobanState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SokobanStateObserver {
@@ -55,16 +54,9 @@ where
 
 impl ObserverWithHashField for SokobanStateObserver {
     fn hash(&self) -> Option<u64> {
-        self.last_state.as_ref().map(|state| {
-            let mut hasher = DefaultHasher::new();
-            for item in state.iter().filter(|item| item.tile() == Tile::Crate) {
-                item.position().hash(&mut hasher);
-            }
-            if self.include_player {
-                state.player().hash(&mut hasher);
-            }
-            hasher.finish()
-        })
+        self.last_state
+            .as_ref()
+            .map(|state| hash_sokoban_state(state, self.include_player))
     }
 }
 
