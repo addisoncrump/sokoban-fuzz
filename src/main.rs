@@ -10,9 +10,10 @@ use libafl::events::Event::UpdateUserStats;
 use libafl::events::{EventFirer, SimpleEventManager};
 use libafl::feedbacks::NewHashFeedback;
 use libafl::monitors::UserStats;
+use libafl::mutators::{TuneableScheduledMutator, TuneableScheduledMutatorMetadata};
 use libafl::prelude::{feedback_and_fast, tuple_list, MultiMonitor, RandomSeed, StdRand};
 use libafl::stages::StdMutationalStage;
-use libafl::state::{HasMetadata, HasSolutions, StdState};
+use libafl::state::{HasExecutions, HasMetadata, HasSolutions, StdState};
 use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
 use serde::{Deserialize, Serialize};
 use serde_xml_rs::from_str;
@@ -98,6 +99,9 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
     let mut mgr = SimpleEventManager::new(monitor);
 
     let sokoban_obs = SokobanStateObserver::new("sokoban_state", false);
+
+    let scheduler = SokobanWeightScheduler::new(&sokoban_obs);
+
     let mut feedback = feedback_and_fast!(
         SokobanSolvableFeedback::new(&sokoban_obs),
         NewHashFeedback::new(&sokoban_obs)
@@ -117,19 +121,22 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
 
     state.add_metadata(InitialPuzzleMetadata::new(puzzle.clone()));
 
-    let scheduler = SokobanWeightScheduler::new();
-
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
-    fuzzer.add_input(
+    let _ = fuzzer.evaluate_input(
         &mut state,
         &mut executor,
         &mut mgr,
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutator =
-        RandomPreferenceMutator::new(tuple_list!(MoveCrateMutator, MoveCrateToTargetMutator));
+    let mutator = TuneableScheduledMutator::new(
+        &mut state,
+        tuple_list!(RandomPreferenceMutator::new(tuple_list!(
+            MoveCrateMutator,
+            MoveCrateToTargetMutator
+        ))),
+    );
     let mutational_stage = StdMutationalStage::transforming(mutator);
 
     let mut stages = tuple_list!(mutational_stage);
@@ -143,8 +150,30 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
         },
     )?;
 
+    let mut last_probs = String::new();
     while state.solutions().is_empty() {
         fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr)?;
+        let executions = *state.executions();
+        let metadata = TuneableScheduledMutatorMetadata::get_mut(&mut state)?;
+        metadata.iter_probabilities_pow_cumulative.clear();
+        for i in 1..=10 {
+            metadata
+                .iter_probabilities_pow_cumulative
+                .push((((1 << 20) * 11 * i / 10) as f32 / executions as f32).min(1.0));
+        }
+        let probs = format!("{:.2?}", metadata.iter_probabilities_pow_cumulative);
+
+        if last_probs != probs {
+            mgr.fire(
+                &mut state,
+                UpdateUserStats {
+                    name: "stackings".to_string(),
+                    value: UserStats::String(probs.clone()),
+                    phantom: Default::default(),
+                },
+            )?;
+            last_probs = probs;
+        }
     }
 
     let testcase = state.solutions().testcase(CorpusId::from(0u64))?;

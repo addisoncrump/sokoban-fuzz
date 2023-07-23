@@ -193,6 +193,7 @@ where
 }
 
 const WEIGHT_PRECISION: u64 = 64;
+const REWEIGHT_FREQUENCY: usize = 10_000;
 
 pub struct RandomPreferenceMutator<MT> {
     mutators: MT,
@@ -232,7 +233,7 @@ where
         stage_idx: i32,
     ) -> Result<MutationResult, Error> {
         if self.until_reweight == 0 {
-            self.until_reweight = state.corpus().count();
+            self.until_reweight = REWEIGHT_FREQUENCY;
             self.total_weight = 0;
             self.weights.clear();
             for i in 0..self.mutators.len() {

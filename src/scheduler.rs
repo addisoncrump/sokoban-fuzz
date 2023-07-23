@@ -1,27 +1,37 @@
 use crate::input::SokobanInput;
+use crate::observer::SokobanStateObserver;
 use crate::state::InitialPuzzleMetadata;
-use libafl::corpus::{CorpusId, HasTestcase};
+use libafl::corpus::CorpusId;
 use libafl::inputs::UsesInput;
-use libafl::prelude::Rand;
+use libafl::observers::ObserversTuple;
+use libafl::prelude::{Named, Rand};
 use libafl::schedulers::Scheduler;
 use libafl::state::{HasCorpus, UsesState};
 use libafl::state::{HasMetadata, HasRand};
-use libafl::Error;
+use libafl::{impl_serdeany, Error};
+use serde::{Deserialize, Serialize};
 use sokoban::Tile;
-use std::collections::HashSet;
 use std::marker::PhantomData;
 
-pub struct SokobanWeightScheduler<S> {
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SokobanWeightSchedulerMetadata {
     options: Vec<CorpusId>,
-    available: Vec<CorpusId>,
+    inverse: Vec<CorpusId>,
+}
+
+impl_serdeany!(SokobanWeightSchedulerMetadata);
+
+pub struct SokobanWeightScheduler<S> {
+    obs_name: String,
+    last_targets: Option<usize>,
     phantom: PhantomData<S>,
 }
 
 impl<S> SokobanWeightScheduler<S> {
-    pub fn new() -> Self {
+    pub fn new(obs: &SokobanStateObserver) -> Self {
         Self {
-            options: Vec::new(),
-            available: Vec::new(),
+            obs_name: obs.name().to_string(),
+            last_targets: None,
             phantom: PhantomData,
         }
     }
@@ -36,41 +46,73 @@ where
 
 impl<S> Scheduler for SokobanWeightScheduler<S>
 where
-    S: HasCorpus<Input = SokobanInput> + HasMetadata + HasRand + HasTestcase,
+    S: HasCorpus<Input = SokobanInput> + HasMetadata + HasRand,
 {
     fn on_add(&mut self, state: &mut Self::State, idx: CorpusId) -> Result<(), Error> {
-        let puzzle = state
+        let weight = self.last_targets.take().unwrap();
+        let inverse = state
             .metadata::<InitialPuzzleMetadata>()
             .unwrap()
             .initial()
-            .clone();
-        let mut testcase = state.testcase_mut(idx)?;
-        let input = testcase.load_input(state.corpus())?;
-        let hallucinated = input
-            .moves()
-            .iter()
-            .copied()
-            .try_fold(puzzle, |puzzle, direction| puzzle.move_player(direction))
-            .unwrap();
-
-        let weight = hallucinated
             .targets()
-            .iter()
-            .filter(|&&target| hallucinated[target] == Tile::Crate)
-            .count()
-            + 1;
+            .len()
+            - weight;
 
-        self.options.extend(std::iter::repeat(idx).take(weight));
-        self.available.push(idx);
+        let metadata = if let Ok(value) = state.metadata_mut::<SokobanWeightSchedulerMetadata>() {
+            value
+        } else {
+            state.add_metadata(SokobanWeightSchedulerMetadata::default());
+            state
+                .metadata_mut::<SokobanWeightSchedulerMetadata>()
+                .unwrap()
+        };
+
+        metadata
+            .options
+            .extend(std::iter::repeat(idx).take(weight + 1));
+        metadata
+            .inverse
+            .extend(std::iter::repeat(idx).take(inverse));
 
         Ok(())
     }
 
-    fn next(&mut self, state: &mut Self::State) -> Result<CorpusId, Error> {
-        if state.rand_mut().below(100) < 10 {
-            Ok(*state.rand_mut().choose(&self.available))
-        } else {
-            Ok(*state.rand_mut().choose(&self.options))
+    fn on_evaluation<OT>(
+        &mut self,
+        _state: &mut Self::State,
+        _input: &<Self::State as UsesInput>::Input,
+        observers: &OT,
+    ) -> Result<(), Error>
+    where
+        OT: ObserversTuple<Self::State>,
+    {
+        if let Some(last_state) = observers
+            .match_name::<SokobanStateObserver>(&self.obs_name)
+            .unwrap()
+            .last_state()
+        {
+            self.last_targets = Some(
+                last_state
+                    .targets()
+                    .iter()
+                    .filter(|&&target| last_state[target] == Tile::Crate)
+                    .count(),
+            );
         }
+        Ok(())
+    }
+
+    fn next(&mut self, state: &mut Self::State) -> Result<CorpusId, Error> {
+        let metadata = state
+            .metadata_map_mut()
+            .remove::<SokobanWeightSchedulerMetadata>()
+            .unwrap();
+        let selected = if state.rand_mut().below(100) < 50 {
+            *state.rand_mut().choose(&metadata.inverse)
+        } else {
+            *state.rand_mut().choose(&metadata.options)
+        };
+        state.metadata_map_mut().insert_boxed(metadata);
+        Ok(selected)
     }
 }
