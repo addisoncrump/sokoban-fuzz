@@ -5,19 +5,21 @@ use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferen
 use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
 use crate::state::InitialPuzzleMetadata;
-use libafl::corpus::{Corpus, CorpusId, HasTestcase, InMemoryCorpus};
-use libafl::events::Event::UpdateUserStats;
+use libafl::corpus::{Corpus, InMemoryCorpus};
+use libafl::events::Event::{Objective, UpdateUserStats};
 use libafl::events::{EventFirer, SimpleEventManager};
 use libafl::feedbacks::NewHashFeedback;
+use libafl::monitors::tui::ui::TuiUI;
+use libafl::monitors::tui::TuiMonitor;
 use libafl::monitors::UserStats;
-
-use libafl::prelude::{feedback_and_fast, tuple_list, MultiMonitor, RandomSeed, StdRand};
+use libafl::prelude::{feedback_and_fast, tuple_list, RandomSeed, RomuDuoJrRand, StdRand};
 use libafl::stages::StdMutationalStage;
 use libafl::state::{HasMetadata, HasSolutions, StdState};
 use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
 use serde::{Deserialize, Serialize};
 use serde_xml_rs::from_str;
 use sokoban::{State as SokobanState, Tile};
+use std::str::FromStr;
 
 mod executor;
 mod feedback;
@@ -69,7 +71,16 @@ impl From<Response> for SokobanState {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = 0;
 
-    for level in 1..=100 {
+    let initial = std::env::args()
+        .nth(1)
+        .and_then(|s| u64::from_str(&s).ok())
+        .unwrap_or(1);
+
+    let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
+
+    let mut mgr = SimpleEventManager::new(monitor);
+
+    for level in initial..=100 {
         let response: Response = from_str(
             &reqwest::blocking::get(format!(
                 "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
@@ -80,27 +91,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let puzzle = SokobanState::from(response);
 
-        println!("level {level}");
-        fuzz(level, puzzle)?;
+        fuzz(&mut mgr, level, puzzle)?;
     }
 
     Ok(())
 }
 
-fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
-    println!("starting state: {:?}", puzzle);
+type SokobanManager = SimpleEventManager<
+    TuiMonitor,
+    StdState<
+        SokobanInput,
+        InMemoryCorpus<SokobanInput>,
+        RomuDuoJrRand,
+        InMemoryCorpus<SokobanInput>,
+    >,
+>;
 
-    #[cfg(feature = "printing")]
-    let print_fn = |s| println!("{s}");
-    #[cfg(not(feature = "printing"))]
-    let print_fn = |_| {};
-    let monitor = MultiMonitor::new(print_fn);
-
-    let mut mgr = SimpleEventManager::new(monitor);
-
+fn fuzz(mgr: &mut SokobanManager, level: u64, puzzle: SokobanState) -> Result<(), Error> {
     let sokoban_obs = SokobanStateObserver::new("sokoban_state", false);
-
-    let scheduler = SokobanWeightScheduler::new(&sokoban_obs);
 
     let mut feedback = feedback_and_fast!(
         SokobanSolvableFeedback::new(&sokoban_obs),
@@ -122,12 +130,14 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
 
     state.add_metadata(InitialPuzzleMetadata::new(puzzle.clone()));
 
+    let scheduler = SokobanWeightScheduler::new(&mut state);
+
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     let _ = fuzzer.evaluate_input(
         &mut state,
         &mut executor,
-        &mut mgr,
+        mgr,
         SokobanInput::new(Vec::new()),
     )?;
 
@@ -145,25 +155,11 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
             phantom: Default::default(),
         },
     )?;
+    mgr.fire(&mut state, Objective { objective_size: 0 })?;
 
     while state.solutions().is_empty() {
-        fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr)?;
+        fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr)?;
     }
-
-    let testcase = state.solutions().testcase(CorpusId::from(0u64))?;
-    let input = testcase.input().as_ref().unwrap().clone();
-
-    let final_state = input
-        .moves()
-        .iter()
-        .cloned()
-        .try_fold(puzzle.clone(), |puzzle, direction| {
-            puzzle.move_player(direction)
-        })
-        .unwrap();
-
-    println!("moves: {:?}", input.moves());
-    println!("final state: {:?}", final_state);
 
     Ok(())
 }

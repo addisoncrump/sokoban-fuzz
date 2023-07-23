@@ -1,41 +1,40 @@
 use crate::input::SokobanInput;
-use crate::observer::SokobanStateObserver;
+use crate::mutators::SokobanRemainingMutationsMetadata;
 use crate::state::InitialPuzzleMetadata;
-use libafl::corpus::CorpusId;
+use crate::util::find_crates;
+use libafl::corpus::{Corpus, CorpusId, HasTestcase};
 use libafl::inputs::UsesInput;
 use libafl::observers::ObserversTuple;
-use libafl::prelude::{Named, Rand};
+use libafl::prelude::Rand;
 use libafl::schedulers::Scheduler;
 use libafl::state::{HasCorpus, UsesState};
 use libafl::state::{HasMetadata, HasRand};
 use libafl::{impl_serdeany, Error};
 use serde::{Deserialize, Serialize};
-use sokoban::Tile;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SokobanWeightSchedulerMetadata {
-    more_set: Vec<CorpusId>,
-    inverse: Vec<CorpusId>,
-    length: Vec<CorpusId>,
-    equal: Vec<CorpusId>,
+    weight: HashMap<CorpusId, usize>,
+    max_weight: usize,
+    total_weight: usize,
+    pruneable: Vec<CorpusId>,
 }
 
 impl_serdeany!(SokobanWeightSchedulerMetadata);
 
 pub struct SokobanWeightScheduler<S> {
-    obs_name: String,
-    last_targets: Option<usize>,
-    last_len: Option<usize>,
     phantom: PhantomData<S>,
 }
 
-impl<S> SokobanWeightScheduler<S> {
-    pub fn new(obs: &SokobanStateObserver) -> Self {
+impl<S> SokobanWeightScheduler<S>
+where
+    S: HasMetadata,
+{
+    pub fn new(state: &mut S) -> Self {
+        state.add_metadata(SokobanWeightSchedulerMetadata::default());
         Self {
-            obs_name: obs.name().to_string(),
-            last_targets: None,
-            last_len: None,
             phantom: PhantomData,
         }
     }
@@ -50,83 +49,103 @@ where
 
 impl<S> Scheduler for SokobanWeightScheduler<S>
 where
-    S: HasCorpus<Input = SokobanInput> + HasMetadata + HasRand,
+    S: HasCorpus<Input = SokobanInput> + HasMetadata + HasRand + HasTestcase,
 {
     fn on_add(&mut self, state: &mut Self::State, idx: CorpusId) -> Result<(), Error> {
-        let weight = self.last_targets.take().unwrap();
-        let inverse = state
-            .metadata::<InitialPuzzleMetadata>()
-            .unwrap()
-            .initial()
-            .targets()
-            .len()
-            - weight;
+        let mut testcase = state.testcase_mut(idx)?;
+        let input = testcase.load_input(state.corpus())?;
+        let hallucinated = input
+            .moves()
+            .iter()
+            .copied()
+            .try_fold(
+                state
+                    .metadata::<InitialPuzzleMetadata>()
+                    .unwrap()
+                    .initial()
+                    .clone(),
+                |puzzle, direction| puzzle.move_player(direction),
+            )
+            .unwrap();
 
-        let metadata = if let Ok(value) = state.metadata_mut::<SokobanWeightSchedulerMetadata>() {
-            value
-        } else {
-            state.add_metadata(SokobanWeightSchedulerMetadata::default());
-            state
-                .metadata_mut::<SokobanWeightSchedulerMetadata>()
-                .unwrap()
-        };
+        let crates = find_crates(&hallucinated);
 
-        metadata
-            .more_set
-            .extend(std::iter::repeat(idx).take(weight + 1));
-        metadata
-            .inverse
-            .extend(std::iter::repeat(idx).take(inverse));
-        metadata
-            .length
-            .extend(std::iter::repeat(idx).take(1 + self.last_len.unwrap()));
-        metadata.equal.push(idx);
+        let tc_meta = SokobanRemainingMutationsMetadata::new(&crates, hallucinated.targets());
+        let remaining = tc_meta.remaining();
+
+        testcase.add_metadata(tc_meta);
+        drop(testcase);
+
+        let metadata = state.metadata_mut::<SokobanWeightSchedulerMetadata>()?;
+        metadata.weight.insert(idx, remaining);
+        metadata.total_weight += remaining;
+        if metadata.max_weight == 0 {
+            metadata.max_weight = remaining;
+        }
 
         Ok(())
     }
 
     fn on_evaluation<OT>(
         &mut self,
-        _state: &mut Self::State,
-        input: &<Self::State as UsesInput>::Input,
-        observers: &OT,
+        state: &mut Self::State,
+        _input: &<Self::State as UsesInput>::Input,
+        _observers: &OT,
     ) -> Result<(), Error>
     where
         OT: ObserversTuple<Self::State>,
     {
-        if let Some(last_state) = observers
-            .match_name::<SokobanStateObserver>(&self.obs_name)
-            .unwrap()
-            .last_state()
-        {
-            self.last_targets = Some(
-                last_state
-                    .targets()
-                    .iter()
-                    .filter(|&&target| last_state[target] == Tile::Crate)
-                    .count(),
-            );
+        // we might be loading inputs
+        if let &Some(current) = state.corpus().current() {
+            let mut metadata = state
+                .metadata_map_mut()
+                .remove::<SokobanWeightSchedulerMetadata>()
+                .unwrap();
+
+            let testcase = state.testcase(current)?;
+            let tc_meta = testcase.metadata::<SokobanRemainingMutationsMetadata>()?;
+            let remaining = tc_meta.remaining();
+            drop(testcase);
+
+            let (computed, subtracted) = if remaining == 0 {
+                let subtracted = metadata.weight.remove(&current).unwrap();
+                metadata.pruneable.push(current);
+                (0, subtracted)
+            } else {
+                // prefer deadending puzzles
+                let computed = 1 + metadata.max_weight - remaining;
+                let subtracted = metadata.weight.insert(current, computed).unwrap();
+                (computed, subtracted)
+            };
+
+            metadata.total_weight += computed;
+            metadata.total_weight -= subtracted;
+
+            state.metadata_map_mut().insert_boxed(metadata);
         }
-        self.last_len = Some(input.moves().len());
         Ok(())
     }
 
     fn next(&mut self, state: &mut Self::State) -> Result<CorpusId, Error> {
-        let metadata = state
+        let mut metadata = state
             .metadata_map_mut()
             .remove::<SokobanWeightSchedulerMetadata>()
             .unwrap();
-        let coin = state.rand_mut().next();
-        let selected = if coin < u64::MAX / 4 {
-            *state.rand_mut().choose(&metadata.inverse)
-        } else if coin < u64::MAX / 2 {
-            *state.rand_mut().choose(&metadata.more_set)
-        } else if coin / 3 < u64::MAX / 4 {
-            *state.rand_mut().choose(&metadata.length)
-        } else {
-            *state.rand_mut().choose(&metadata.equal)
-        };
-        state.metadata_map_mut().insert_boxed(metadata);
-        Ok(selected)
+
+        for pruneable in metadata.pruneable.drain(..) {
+            state.corpus_mut().remove(pruneable)?;
+        }
+
+        let mut selected = state.rand_mut().below(metadata.total_weight as u64) as usize;
+        for (&idx, &weight) in &metadata.weight {
+            if let Some(next) = selected.checked_sub(weight) {
+                selected = next;
+            } else {
+                state.metadata_map_mut().insert_boxed(metadata);
+                state.corpus_mut().current_mut().replace(idx);
+                return Ok(idx);
+            }
+        }
+        unreachable!()
     }
 }

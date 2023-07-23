@@ -1,14 +1,47 @@
 use crate::input::HallucinatedSokobanInput;
 use crate::util;
 use crate::util::{opposite, push_to, POSSIBLE_MOVES};
+use libafl::corpus::{Corpus, HasTestcase};
 use libafl::mutators::{MutationResult, Mutator, MutatorsTuple};
 use libafl::prelude::{MutationId, Named, Rand};
 use libafl::state::{HasCorpus, HasMaxSize, HasMetadata, HasRand};
-use libafl::Error;
-use rand::seq::SliceRandom;
+use libafl::{impl_serdeany, Error};
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use sokoban::error::SokobanError::{InvalidMoveCrate, InvalidMoveOOB, InvalidMoveWall};
-use sokoban::Tile;
+use sokoban::Direction;
+use std::collections::HashSet;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SokobanRemainingMutationsMetadata {
+    moves_remaining: HashSet<((usize, usize), Direction)>,
+    move_to_targets_remaining: HashSet<((usize, usize), (usize, usize))>,
+}
+
+impl_serdeany!(SokobanRemainingMutationsMetadata);
+
+impl SokobanRemainingMutationsMetadata {
+    pub fn new(crates: &[(usize, usize)], targets: &[(usize, usize)]) -> Self {
+        let mut moves_remaining = HashSet::with_capacity(crates.len() * 4);
+        let mut move_to_targets_remaining = HashSet::with_capacity(crates.len() * targets.len());
+        for &moved in crates {
+            for direction in POSSIBLE_MOVES {
+                moves_remaining.insert((moved, direction));
+            }
+            for &target in targets {
+                move_to_targets_remaining.insert((moved, target));
+            }
+        }
+        Self {
+            moves_remaining,
+            move_to_targets_remaining,
+        }
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.moves_remaining.len() + self.move_to_targets_remaining.len()
+    }
+}
 
 pub struct AddMoveMutator;
 
@@ -65,11 +98,9 @@ impl Named for MoveCrateMutator {
     }
 }
 
-const MAX_TRIES: usize = 4;
-
 impl<S> Mutator<HallucinatedSokobanInput, S> for MoveCrateMutator
 where
-    S: HasMaxSize + HasMetadata + HasRand,
+    S: HasCorpus + HasMaxSize + HasMetadata + HasRand + HasTestcase,
     S::Rand: RngCore,
 {
     fn mutate(
@@ -88,31 +119,33 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        // first, find the crates in the current puzzle state
-        let mut crates = util::find_crates(&current);
-        crates.shuffle(state.rand_mut());
-        let mut possible_moves = POSSIBLE_MOVES;
-        possible_moves.shuffle(state.rand_mut());
+        // get the available mutations
+        let selector = state.rand_mut().next() as usize;
+        let idx = state.corpus().current().unwrap();
+        let mut testcase = state.testcase_mut(idx)?;
+        let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
-        // try to move a random crate in a random direction
-        for target in crates {
-            for direction in possible_moves {
-                if let Some(destination) = opposite(direction).go(target) {
-                    if let Some(moves) = util::go_to(current.player(), destination, &current) {
-                        input.hallucinated_mut().replace(
-                            moves
-                                .iter()
-                                .copied()
-                                .try_fold(current, |current, direction| {
-                                    current.move_player(direction)
-                                })
-                                .unwrap(),
-                        );
-                        input.moves_mut().extend(moves);
-                        input.moves_mut().push(direction);
-                        return Ok(MutationResult::Mutated);
-                    }
-                }
+        if remaining.moves_remaining.is_empty() {
+            return Ok(MutationResult::Skipped);
+        }
+        let selector = selector % remaining.moves_remaining.len();
+        let entry = *remaining.moves_remaining.iter().nth(selector).unwrap();
+        remaining.moves_remaining.remove(&entry);
+
+        let (target, direction) = entry;
+
+        if let Some(destination) = opposite(direction).go(target) {
+            if let Some(moves) = util::go_to(current.player(), destination, &current) {
+                input.hallucinated_mut().replace(
+                    moves
+                        .iter()
+                        .copied()
+                        .try_fold(current, |current, direction| current.move_player(direction))
+                        .unwrap(),
+                );
+                input.moves_mut().extend(moves);
+                input.moves_mut().push(direction);
+                return Ok(MutationResult::Mutated);
             }
         }
 
@@ -132,7 +165,7 @@ impl Named for MoveCrateToTargetMutator {
 
 impl<S> Mutator<HallucinatedSokobanInput, S> for MoveCrateToTargetMutator
 where
-    S: HasMaxSize + HasMetadata + HasRand,
+    S: HasCorpus + HasMaxSize + HasMetadata + HasRand + HasTestcase,
     S::Rand: RngCore,
 {
     fn mutate(
@@ -151,40 +184,35 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        // first, find the crates in the current puzzle state
-        let mut crates = util::find_crates(&current);
-        crates.shuffle(state.rand_mut());
+        // get the available mutations
+        let selector = state.rand_mut().next() as usize;
+        let idx = state.corpus().current().unwrap();
+        let mut testcase = state.testcase_mut(idx)?;
+        let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
-        // find the targets which are not occupied by crates
-        let mut targets = current
-            .targets()
+        if remaining.move_to_targets_remaining.is_empty() {
+            return Ok(MutationResult::Skipped);
+        }
+        let selector = selector % remaining.move_to_targets_remaining.len();
+        let entry = *remaining
+            .move_to_targets_remaining
             .iter()
-            .cloned()
-            .filter(|&target| current[target] == Tile::Floor)
-            .collect::<Vec<_>>();
-        targets.shuffle(state.rand_mut());
+            .nth(selector)
+            .unwrap();
+        remaining.move_to_targets_remaining.remove(&entry);
 
-        let mut attempts = 0;
+        let (moved, target) = entry;
 
-        // try to move a random crate in a random direction
-        for moved in crates {
-            if attempts >= MAX_TRIES {
-                break;
-            }
-            for target in targets.iter().copied() {
-                if let Some(moves) = push_to(moved, target, &current) {
-                    input.hallucinated_mut().replace(
-                        moves
-                            .iter()
-                            .copied()
-                            .try_fold(current, |current, direction| current.move_player(direction))
-                            .unwrap(),
-                    );
-                    input.moves_mut().extend(moves);
-                    return Ok(MutationResult::Mutated);
-                }
-                attempts += 1;
-            }
+        if let Some(moves) = push_to(moved, target, &current) {
+            input.hallucinated_mut().replace(
+                moves
+                    .iter()
+                    .copied()
+                    .try_fold(current, |current, direction| current.move_player(direction))
+                    .unwrap(),
+            );
+            input.moves_mut().extend(moves);
+            return Ok(MutationResult::Mutated);
         }
 
         input.hallucinated_mut().replace(current);
