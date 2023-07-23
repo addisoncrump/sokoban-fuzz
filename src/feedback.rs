@@ -1,9 +1,11 @@
+use crate::input::SokobanInput;
 use crate::observer::SokobanStateObserver;
 use crate::util::find_crates;
-use libafl::events::EventFirer;
+use libafl::events::{Event, EventFirer};
 use libafl::executors::ExitKind;
 use libafl::feedbacks::Feedback;
 use libafl::inputs::UsesInput;
+use libafl::monitors::UserStats;
 use libafl::observers::ObserversTuple;
 use libafl::prelude::Named;
 use libafl::state::HasClientPerfMonitor;
@@ -140,5 +142,83 @@ where
         } else {
             Ok(false)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct SokobanStatisticsFeedback {
+    most_set: usize,
+    most_moves: usize,
+    obs_name: String,
+    name: String,
+}
+
+impl SokobanStatisticsFeedback {
+    pub fn new(obs: &SokobanStateObserver) -> Self {
+        Self {
+            most_set: 0,
+            most_moves: 0,
+            obs_name: obs.name().to_string(),
+            name: format!("stats_{}", obs.name()),
+        }
+    }
+}
+
+impl Named for SokobanStatisticsFeedback {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl<S> Feedback<S> for SokobanStatisticsFeedback
+where
+    S: UsesInput<Input = SokobanInput> + HasClientPerfMonitor,
+{
+    fn is_interesting<EM, OT>(
+        &mut self,
+        state: &mut S,
+        manager: &mut EM,
+        input: &S::Input,
+        observers: &OT,
+        _exit_kind: &ExitKind,
+    ) -> Result<bool, Error>
+    where
+        EM: EventFirer<State = S>,
+        OT: ObserversTuple<S>,
+    {
+        let state_obs = observers
+            .match_name::<SokobanStateObserver>(&self.obs_name)
+            .unwrap();
+
+        if let Some(last_state) = state_obs.last_state() {
+            let most_set = last_state
+                .targets()
+                .iter()
+                .filter(|&&target| last_state[target] == Tile::Crate)
+                .count();
+            if most_set > self.most_set {
+                manager.fire(
+                    state,
+                    Event::UpdateUserStats {
+                        name: "most_set".to_string(),
+                        value: UserStats::Ratio(most_set as u64, last_state.targets().len() as u64),
+                        phantom: Default::default(),
+                    },
+                )?;
+                self.most_set = most_set;
+            }
+            if input.moves().len() > self.most_moves {
+                manager.fire(
+                    state,
+                    Event::UpdateUserStats {
+                        name: "most_moves".to_string(),
+                        value: UserStats::Number(input.moves().len() as u64),
+                        phantom: Default::default(),
+                    },
+                )?;
+                self.most_moves = input.moves().len();
+            }
+        }
+        Ok(true)
     }
 }

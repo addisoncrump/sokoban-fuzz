@@ -67,7 +67,7 @@ impl Named for MoveCrateMutator {
     }
 }
 
-const MAX_TRIES: usize = 16;
+const MAX_TRIES: usize = 4;
 
 impl<S> Mutator<HallucinatedSokobanInput, S> for MoveCrateMutator
 where
@@ -135,6 +135,7 @@ impl Named for MoveCrateToTargetMutator {
 impl<S> Mutator<HallucinatedSokobanInput, S> for MoveCrateToTargetMutator
 where
     S: HasMaxSize + HasMetadata + HasRand,
+    S::Rand: RngCore,
 {
     fn mutate(
         &mut self,
@@ -153,25 +154,26 @@ where
         }
 
         // first, find the crates in the current puzzle state
-        let crates = util::find_crates(&current);
+        let mut crates = util::find_crates(&current);
+        crates.shuffle(state.rand_mut());
 
         // find the targets which are not occupied by crates
-        let targets = current
+        let mut targets = current
             .targets()
             .iter()
             .cloned()
             .filter(|&target| current[target] == Tile::Floor)
             .collect::<Vec<_>>();
+        targets.shuffle(state.rand_mut());
 
-        // computing paths is really expensive, so remember which we tried already
-        let mut attempted_pairs = HashSet::new();
+        let mut attempts = 0;
 
         // try to move a random crate in a random direction
-        for _ in 0..MAX_TRIES {
-            let moved = *state.rand_mut().choose(&crates);
-            let target = *state.rand_mut().choose(&targets);
-
-            if !attempted_pairs.insert((moved, target)) {
+        for moved in crates {
+            if attempts >= MAX_TRIES {
+                break;
+            }
+            for target in targets.iter().copied() {
                 if let Some(moves) = push_to(moved, target, &current) {
                     input.hallucinated_mut().replace(
                         moves
@@ -183,6 +185,7 @@ where
                     input.moves_mut().extend(moves);
                     return Ok(MutationResult::Mutated);
                 }
+                attempts += 1;
             }
         }
 

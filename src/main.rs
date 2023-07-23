@@ -1,5 +1,5 @@
 use crate::executor::SokobanExecutor;
-use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback};
+use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
 use crate::input::SokobanInput;
 use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferenceMutator};
 use crate::observer::SokobanStateObserver;
@@ -69,7 +69,7 @@ impl From<Response> for SokobanState {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = 0;
 
-    for level in 1..100 {
+    for level in 20..100 {
         let response: Response = from_str(
             &reqwest::blocking::get(format!(
                 "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
@@ -104,7 +104,8 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
 
     let mut feedback = feedback_and_fast!(
         SokobanSolvableFeedback::new(&sokoban_obs),
-        NewHashFeedback::new(&sokoban_obs)
+        NewHashFeedback::new(&sokoban_obs),
+        SokobanStatisticsFeedback::new(&sokoban_obs)
     );
     let mut objective = SokobanSolvedFeedback::new(&sokoban_obs);
 
@@ -130,13 +131,8 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutator = TuneableScheduledMutator::new(
-        &mut state,
-        tuple_list!(RandomPreferenceMutator::new(tuple_list!(
-            MoveCrateMutator,
-            MoveCrateToTargetMutator
-        ))),
-    );
+    let mutator =
+        RandomPreferenceMutator::new(tuple_list!(MoveCrateMutator, MoveCrateToTargetMutator));
     let mutational_stage = StdMutationalStage::transforming(mutator);
 
     let mut stages = tuple_list!(mutational_stage);
@@ -150,30 +146,8 @@ fn fuzz(level: u64, puzzle: SokobanState) -> Result<(), Error> {
         },
     )?;
 
-    let mut last_probs = String::new();
     while state.solutions().is_empty() {
         fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr)?;
-        let executions = *state.executions();
-        let metadata = TuneableScheduledMutatorMetadata::get_mut(&mut state)?;
-        metadata.iter_probabilities_pow_cumulative.clear();
-        for i in 1..=10 {
-            metadata
-                .iter_probabilities_pow_cumulative
-                .push((((1 << 20) * 11 * i / 10) as f32 / executions as f32).min(1.0));
-        }
-        let probs = format!("{:.2?}", metadata.iter_probabilities_pow_cumulative);
-
-        if last_probs != probs {
-            mgr.fire(
-                &mut state,
-                UpdateUserStats {
-                    name: "stackings".to_string(),
-                    value: UserStats::String(probs.clone()),
-                    phantom: Default::default(),
-                },
-            )?;
-            last_probs = probs;
-        }
     }
 
     let testcase = state.solutions().testcase(CorpusId::from(0u64))?;

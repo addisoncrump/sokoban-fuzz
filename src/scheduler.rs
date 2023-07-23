@@ -15,8 +15,10 @@ use std::marker::PhantomData;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SokobanWeightSchedulerMetadata {
-    options: Vec<CorpusId>,
+    more_set: Vec<CorpusId>,
     inverse: Vec<CorpusId>,
+    length: Vec<CorpusId>,
+    equal: Vec<CorpusId>,
 }
 
 impl_serdeany!(SokobanWeightSchedulerMetadata);
@@ -24,6 +26,7 @@ impl_serdeany!(SokobanWeightSchedulerMetadata);
 pub struct SokobanWeightScheduler<S> {
     obs_name: String,
     last_targets: Option<usize>,
+    last_len: Option<usize>,
     phantom: PhantomData<S>,
 }
 
@@ -32,6 +35,7 @@ impl<S> SokobanWeightScheduler<S> {
         Self {
             obs_name: obs.name().to_string(),
             last_targets: None,
+            last_len: None,
             phantom: PhantomData,
         }
     }
@@ -68,11 +72,15 @@ where
         };
 
         metadata
-            .options
+            .more_set
             .extend(std::iter::repeat(idx).take(weight + 1));
         metadata
             .inverse
             .extend(std::iter::repeat(idx).take(inverse));
+        metadata
+            .length
+            .extend(std::iter::repeat(idx).take(1 + self.last_len.unwrap()));
+        metadata.equal.push(idx);
 
         Ok(())
     }
@@ -80,7 +88,7 @@ where
     fn on_evaluation<OT>(
         &mut self,
         _state: &mut Self::State,
-        _input: &<Self::State as UsesInput>::Input,
+        input: &<Self::State as UsesInput>::Input,
         observers: &OT,
     ) -> Result<(), Error>
     where
@@ -99,6 +107,7 @@ where
                     .count(),
             );
         }
+        self.last_len = Some(input.moves().len());
         Ok(())
     }
 
@@ -107,10 +116,15 @@ where
             .metadata_map_mut()
             .remove::<SokobanWeightSchedulerMetadata>()
             .unwrap();
-        let selected = if state.rand_mut().below(100) < 50 {
+        let coin = state.rand_mut().next();
+        let selected = if coin < u64::MAX / 4 {
             *state.rand_mut().choose(&metadata.inverse)
+        } else if coin < u64::MAX / 2 {
+            *state.rand_mut().choose(&metadata.more_set)
+        } else if coin / 3 < u64::MAX / 4 {
+            *state.rand_mut().choose(&metadata.length)
         } else {
-            *state.rand_mut().choose(&metadata.options)
+            *state.rand_mut().choose(&metadata.equal)
         };
         state.metadata_map_mut().insert_boxed(metadata);
         Ok(selected)
