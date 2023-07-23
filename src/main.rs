@@ -69,7 +69,7 @@ impl From<Response> for SokobanState {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = 0;
 
-    for level in 20..100 {
+    for level in 1..=100 {
         let response: Response = from_str(
             &reqwest::blocking::get(format!(
                 "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
