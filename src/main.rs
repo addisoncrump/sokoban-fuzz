@@ -5,17 +5,22 @@ use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferen
 use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
 use crate::state::InitialPuzzleMetadata;
-use libafl::corpus::{Corpus, InMemoryCorpus};
-use libafl::events::Event::{Objective, UpdateUserStats};
-use libafl::events::{EventFirer, SimpleEventManager};
-use libafl::feedbacks::NewHashFeedback;
-use libafl::monitors::tui::ui::TuiUI;
-use libafl::monitors::tui::TuiMonitor;
-use libafl::monitors::UserStats;
-use libafl::prelude::{feedback_and_fast, tuple_list, RandomSeed, RomuDuoJrRand, StdRand};
-use libafl::stages::StdMutationalStage;
-use libafl::state::{HasMetadata, HasSolutions, StdState};
-use libafl::{Error, Evaluator, Fuzzer, StdFuzzer};
+use libafl::{
+    corpus::{Corpus, InMemoryCorpus},
+    events::Event::{Objective, UpdateUserStats},
+    events::{EventFirer, SimpleEventManager},
+    feedbacks::NewHashFeedback,
+    monitors::{
+        tui::{ui::TuiUI, TuiMonitor},
+        Monitor,
+        // MultiMonitor,
+        UserStats,
+    },
+    prelude::{feedback_and_fast, tuple_list, RandomSeed, RomuDuoJrRand, StdRand},
+    stages::StdMutationalStage,
+    state::{HasMetadata, HasSolutions, StdState},
+    Error, Evaluator, Fuzzer, StdFuzzer,
+};
 use serde::{Deserialize, Serialize};
 use serde_xml_rs::from_str;
 use sokoban::{State as SokobanState, Tile};
@@ -77,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(1);
 
     let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
+    // let monitor = MultiMonitor::new(|s| println!("{s}"));
 
     let mut mgr = SimpleEventManager::new(monitor);
 
@@ -91,14 +97,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let puzzle = SokobanState::from(response);
 
-        fuzz(&mut mgr, level, puzzle)?;
+        if let Err(e) = fuzz(&mut mgr, level, puzzle) {
+            eprintln!("{e}");
+            return Ok(());
+        }
     }
 
     Ok(())
 }
 
-type SokobanManager = SimpleEventManager<
-    TuiMonitor,
+type SokobanManager<M> = SimpleEventManager<
+    M,
     StdState<
         SokobanInput,
         InMemoryCorpus<SokobanInput>,
@@ -107,8 +116,12 @@ type SokobanManager = SimpleEventManager<
     >,
 >;
 
-fn fuzz(mgr: &mut SokobanManager, level: u64, puzzle: SokobanState) -> Result<(), Error> {
-    let sokoban_obs = SokobanStateObserver::new("sokoban_state", false);
+fn fuzz(
+    mgr: &mut SokobanManager<impl Monitor>,
+    level: u64,
+    puzzle: SokobanState,
+) -> Result<(), Error> {
+    let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
 
     let mut feedback = feedback_and_fast!(
         SokobanSolvableFeedback::new(&sokoban_obs),
@@ -130,7 +143,7 @@ fn fuzz(mgr: &mut SokobanManager, level: u64, puzzle: SokobanState) -> Result<()
 
     state.add_metadata(InitialPuzzleMetadata::new(puzzle.clone()));
 
-    let scheduler = SokobanWeightScheduler::new(&mut state);
+    let scheduler = SokobanWeightScheduler::new();
 
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 

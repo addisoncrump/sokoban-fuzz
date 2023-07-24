@@ -8,8 +8,7 @@ use libafl::state::{HasCorpus, HasMaxSize, HasMetadata, HasRand};
 use libafl::{impl_serdeany, Error};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sokoban::error::SokobanError::{InvalidMoveCrate, InvalidMoveOOB, InvalidMoveWall};
-use sokoban::Direction;
+use sokoban::{Direction, Tile};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -43,53 +42,6 @@ impl SokobanRemainingMutationsMetadata {
     }
 }
 
-pub struct AddMoveMutator;
-
-impl Named for AddMoveMutator {
-    fn name(&self) -> &str {
-        "move"
-    }
-}
-
-impl<S> Mutator<HallucinatedSokobanInput, S> for AddMoveMutator
-where
-    S: HasMaxSize + HasRand,
-{
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut HallucinatedSokobanInput,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
-        if state.max_size() <= input.moves().len() {
-            return Ok(MutationResult::Skipped);
-        }
-        let hallucinated = input.hallucinated_mut().take().unwrap();
-        if hallucinated.in_solution_state() {
-            input.hallucinated_mut().replace(hallucinated);
-            return Ok(MutationResult::Skipped);
-        }
-
-        let dir = state.rand_mut().choose(POSSIBLE_MOVES);
-        match hallucinated.move_player(dir) {
-            Ok(hallucinated) => {
-                input.hallucinated_mut().replace(hallucinated);
-                input.moves_mut().push(dir);
-                Ok(MutationResult::Mutated)
-            }
-            Err(
-                InvalidMoveWall { last_state, .. }
-                | InvalidMoveCrate { last_state, .. }
-                | InvalidMoveOOB { last_state, .. },
-            ) => {
-                input.hallucinated_mut().replace(last_state);
-                Ok(MutationResult::Skipped)
-            }
-            Err(_) => unreachable!(),
-        }
-    }
-}
-
 pub struct MoveCrateMutator;
 
 impl Named for MoveCrateMutator {
@@ -115,43 +67,49 @@ where
 
         let current = input.hallucinated_mut().take().unwrap();
         if current.in_solution_state() {
-            input.hallucinated_mut().replace(current);
+            // input.hallucinated_mut().replace(current);
             return Ok(MutationResult::Skipped);
         }
 
-        // get the available mutations
-        let selector = state.rand_mut().next() as usize;
         let idx = state.corpus().current().unwrap();
-        let mut testcase = state.testcase_mut(idx)?;
-        let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
-        if remaining.moves_remaining.is_empty() {
-            return Ok(MutationResult::Skipped);
-        }
-        let selector = selector % remaining.moves_remaining.len();
-        let entry = *remaining.moves_remaining.iter().nth(selector).unwrap();
-        remaining.moves_remaining.remove(&entry);
+        loop {
+            // get the available mutations
+            let selector = state.rand_mut().next() as usize;
+            let mut testcase = state.testcase_mut(idx)?;
+            let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
-        let (target, direction) = entry;
+            if remaining.moves_remaining.is_empty() {
+                // input.hallucinated_mut().replace(current);
+                return Ok(MutationResult::Skipped);
+            }
+            let selector = selector % remaining.moves_remaining.len();
+            let entry = *remaining.moves_remaining.iter().nth(selector).unwrap();
+            remaining.moves_remaining.remove(&entry);
 
-        if let Some(destination) = opposite(direction).go(target) {
-            if let Some(moves) = util::go_to(current.player(), destination, &current) {
-                input.hallucinated_mut().replace(
-                    moves
-                        .iter()
-                        .copied()
-                        .try_fold(current, |current, direction| current.move_player(direction))
-                        .unwrap(),
-                );
-                input.moves_mut().extend(moves);
-                input.moves_mut().push(direction);
-                return Ok(MutationResult::Mutated);
+            let (target, direction) = entry;
+
+            if let Some(potential) = direction.go(target) {
+                if current[potential] == Tile::Floor {
+                    if let Some(destination) = opposite(direction).go(target) {
+                        if let Some(moves) = util::go_to(current.player(), destination, &current) {
+                            // input.hallucinated_mut().replace(
+                            //     moves
+                            //         .iter()
+                            //         .copied()
+                            //         .try_fold(current, |current, direction| {
+                            //             current.move_player(direction)
+                            //         })
+                            //         .unwrap(),
+                            // );
+                            input.moves_mut().extend(moves);
+                            input.moves_mut().push(direction);
+                            return Ok(MutationResult::Mutated);
+                        }
+                    }
+                }
             }
         }
-
-        input.hallucinated_mut().replace(current);
-
-        Ok(MutationResult::Skipped)
     }
 }
 
@@ -180,44 +138,43 @@ where
 
         let current = input.hallucinated_mut().take().unwrap();
         if current.in_solution_state() {
-            input.hallucinated_mut().replace(current);
+            // input.hallucinated_mut().replace(current);
             return Ok(MutationResult::Skipped);
         }
 
-        // get the available mutations
-        let selector = state.rand_mut().next() as usize;
         let idx = state.corpus().current().unwrap();
-        let mut testcase = state.testcase_mut(idx)?;
-        let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
-        if remaining.move_to_targets_remaining.is_empty() {
-            return Ok(MutationResult::Skipped);
+        loop {
+            // get the available mutations
+            let selector = state.rand_mut().next() as usize;
+            let mut testcase = state.testcase_mut(idx)?;
+            let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
+
+            if remaining.move_to_targets_remaining.is_empty() {
+                return Ok(MutationResult::Skipped);
+            }
+            let selector = selector % remaining.move_to_targets_remaining.len();
+            let entry = *remaining
+                .move_to_targets_remaining
+                .iter()
+                .nth(selector)
+                .unwrap();
+            remaining.move_to_targets_remaining.remove(&entry);
+
+            let (moved, target) = entry;
+
+            if let Some(moves) = push_to(moved, target, &current) {
+                // input.hallucinated_mut().replace(
+                //     moves
+                //         .iter()
+                //         .copied()
+                //         .try_fold(current, |current, direction| current.move_player(direction))
+                //         .unwrap(),
+                // );
+                input.moves_mut().extend(moves);
+                return Ok(MutationResult::Mutated);
+            }
         }
-        let selector = selector % remaining.move_to_targets_remaining.len();
-        let entry = *remaining
-            .move_to_targets_remaining
-            .iter()
-            .nth(selector)
-            .unwrap();
-        remaining.move_to_targets_remaining.remove(&entry);
-
-        let (moved, target) = entry;
-
-        if let Some(moves) = push_to(moved, target, &current) {
-            input.hallucinated_mut().replace(
-                moves
-                    .iter()
-                    .copied()
-                    .try_fold(current, |current, direction| current.move_player(direction))
-                    .unwrap(),
-            );
-            input.moves_mut().extend(moves);
-            return Ok(MutationResult::Mutated);
-        }
-
-        input.hallucinated_mut().replace(current);
-
-        Ok(MutationResult::Skipped)
     }
 }
 
