@@ -1,9 +1,7 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
 use crate::input::SokobanInput;
-use crate::mutators::{
-    MoveCrateMutator, MoveCrateToTargetMutator, OneShotMutator, RandomPreferenceMutator,
-};
+use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator};
 use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
 use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
@@ -157,14 +155,11 @@ fn fuzz(
         SokobanInput::new(Vec::new()),
     )?;
 
-    let mutator =
-        RandomPreferenceMutator::new(tuple_list!(MoveCrateMutator, MoveCrateToTargetMutator));
-    let mutational_stage = StdMutationalStage::transforming(mutator);
+    // let oneshot_stage = StdMutationalStage::transforming(OneShotMutator);
+    let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
+    let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
 
-    // let oneshot = OneShotMutator;
-    // let oneshot_stage = StdMutationalStage::transforming(oneshot);
-
-    let mut stages = tuple_list!(mutational_stage);
+    let mut stages = tuple_list!(move_stage, move_to_target_stage);
 
     mgr.fire(
         &mut state,

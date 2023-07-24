@@ -10,26 +10,25 @@ use rand::seq::SliceRandom;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sokoban::{Direction, Tile};
-use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SokobanRemainingMutationsMetadata {
-    moves_remaining: HashSet<((usize, usize), Direction)>,
-    move_to_targets_remaining: HashSet<((usize, usize), (usize, usize))>,
+    moves_remaining: Vec<((usize, usize), Direction)>,
+    move_to_targets_remaining: Vec<((usize, usize), (usize, usize))>,
 }
 
 impl_serdeany!(SokobanRemainingMutationsMetadata);
 
 impl SokobanRemainingMutationsMetadata {
     pub fn new(crates: &[(usize, usize)], targets: &[(usize, usize)]) -> Self {
-        let mut moves_remaining = HashSet::with_capacity(crates.len() * 4);
-        let mut move_to_targets_remaining = HashSet::with_capacity(crates.len() * targets.len());
+        let mut moves_remaining = Vec::with_capacity(crates.len() * 4);
+        let mut move_to_targets_remaining = Vec::with_capacity(crates.len() * targets.len());
         for &moved in crates {
             for direction in POSSIBLE_MOVES {
-                moves_remaining.insert((moved, direction));
+                moves_remaining.push((moved, direction));
             }
             for &target in targets {
-                move_to_targets_remaining.insert((moved, target));
+                move_to_targets_remaining.push((moved, target));
             }
         }
         Self {
@@ -76,7 +75,6 @@ where
 
         loop {
             // get the available mutations
-            let selector = state.rand_mut().next() as usize;
             let mut testcase = state.testcase_mut(idx)?;
             let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
@@ -84,11 +82,7 @@ where
                 input.hallucinated_mut().replace(current);
                 return Ok(MutationResult::Skipped);
             }
-            let selector = selector % remaining.moves_remaining.len();
-            let entry = *remaining.moves_remaining.iter().nth(selector).unwrap();
-            remaining.moves_remaining.remove(&entry);
-
-            let (target, direction) = entry;
+            let (target, direction) = remaining.moves_remaining.pop().unwrap();
 
             if let Some(potential) = direction.go(target) {
                 if current[potential] == Tile::Floor {
@@ -148,7 +142,6 @@ where
 
         loop {
             // get the available mutations
-            let selector = state.rand_mut().next() as usize;
             let mut testcase = state.testcase_mut(idx)?;
             let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
@@ -156,15 +149,7 @@ where
                 input.hallucinated_mut().replace(current);
                 return Ok(MutationResult::Skipped);
             }
-            let selector = selector % remaining.move_to_targets_remaining.len();
-            let entry = *remaining
-                .move_to_targets_remaining
-                .iter()
-                .nth(selector)
-                .unwrap();
-            remaining.move_to_targets_remaining.remove(&entry);
-
-            let (moved, target) = entry;
+            let (moved, target) = remaining.move_to_targets_remaining.pop().unwrap();
 
             if let Some(moves) = push_to(moved, target, &current) {
                 input.hallucinated_mut().replace(
