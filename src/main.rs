@@ -1,10 +1,12 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
 use crate::input::SokobanInput;
-use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, RandomPreferenceMutator};
+use crate::mutators::{
+    MoveCrateMutator, MoveCrateToTargetMutator, OneShotMutator, RandomPreferenceMutator,
+};
 use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
-use crate::state::InitialPuzzleMetadata;
+use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
 use libafl::{
     corpus::{Corpus, InMemoryCorpus},
     events::Event::{Objective, UpdateUserStats},
@@ -124,8 +126,8 @@ fn fuzz(
     let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
 
     let mut feedback = feedback_and_fast!(
-        SokobanSolvableFeedback::new(&sokoban_obs),
         NewHashFeedback::new(&sokoban_obs),
+        SokobanSolvableFeedback::new(&sokoban_obs),
         SokobanStatisticsFeedback::new(&sokoban_obs)
     );
     let mut objective = SokobanSolvedFeedback::new(&sokoban_obs);
@@ -142,6 +144,7 @@ fn fuzz(
     )?;
 
     state.add_metadata(InitialPuzzleMetadata::new(puzzle.clone()));
+    state.add_metadata(LastHallucinationMetadata::default());
 
     let scheduler = SokobanWeightScheduler::new();
 
@@ -157,6 +160,9 @@ fn fuzz(
     let mutator =
         RandomPreferenceMutator::new(tuple_list!(MoveCrateMutator, MoveCrateToTargetMutator));
     let mutational_stage = StdMutationalStage::transforming(mutator);
+
+    // let oneshot = OneShotMutator;
+    // let oneshot_stage = StdMutationalStage::transforming(oneshot);
 
     let mut stages = tuple_list!(mutational_stage);
 

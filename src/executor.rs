@@ -1,9 +1,10 @@
 use crate::input::SokobanInput;
 use crate::observer::{SokobanObserversTuple, SokobanStateObserver};
+use crate::state::LastHallucinationMetadata;
 use libafl::executors::{Executor, ExitKind, HasObservers};
 use libafl::inputs::UsesInput;
 use libafl::observers::{ObserversTuple, UsesObservers};
-use libafl::state::UsesState;
+use libafl::state::{HasMetadata, UsesState};
 use libafl::Error;
 use sokoban::State as SokobanState;
 use std::fmt::Debug;
@@ -42,27 +43,47 @@ impl<EM, OT, S, Z> Executor<EM, Z> for SokobanExecutor<OT, S>
 where
     EM: UsesState<State = Self::State>,
     OT: ObserversTuple<S> + SokobanObserversTuple + Debug,
-    S: UsesInput<Input = SokobanInput> + Debug,
+    S: UsesInput<Input = SokobanInput> + HasMetadata + Debug,
     Z: UsesState<State = Self::State>,
 {
     fn run_target(
         &mut self,
         _fuzzer: &mut Z,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         _mgr: &mut EM,
         input: &Self::Input,
     ) -> Result<ExitKind, Error> {
-        if let Ok(state) = input
-            .moves()
-            .iter()
-            .cloned()
-            .try_fold(self.initial.clone(), |state, dir| state.move_player(dir))
-        {
+        let hallucinated = state
+            .metadata_mut::<LastHallucinationMetadata>()
+            .ok()
+            .and_then(|metadata| metadata.hallucination_mut().take());
+
+        #[cfg(debug_assertions)]
+        if let Some(hallucinated) = hallucinated.as_ref() {
+            debug_assert_eq!(
+                hallucinated,
+                &input
+                    .moves()
+                    .iter()
+                    .cloned()
+                    .try_fold(self.initial.clone(), |state, dir| state.move_player(dir))
+                    .unwrap()
+            );
+        }
+
+        if let Some(current) = hallucinated.or_else(|| {
+            input
+                .moves()
+                .iter()
+                .cloned()
+                .try_fold(self.initial.clone(), |state, dir| state.move_player(dir))
+                .ok()
+        }) {
             let sokoban_observer = self
                 .observers
                 .match_name_mut::<SokobanStateObserver>(&self.state_observer_name)
                 .unwrap();
-            sokoban_observer.replace(state);
+            sokoban_observer.replace(current);
             Ok(ExitKind::Ok)
         } else {
             Ok(ExitKind::Crash)

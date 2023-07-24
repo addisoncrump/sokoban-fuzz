@@ -1,4 +1,4 @@
-use crate::state::InitialPuzzleMetadata;
+use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
 use libafl::corpus::{CorpusId, Testcase};
 use libafl::inputs::Input;
 use libafl::prelude::HasCorpus;
@@ -7,6 +7,7 @@ use libafl::state::HasMetadata;
 use libafl::Error;
 use serde::{Deserialize, Serialize};
 use sokoban::{Direction, State as SokobanState};
+use std::ops::DerefMut;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SokobanInput {
@@ -93,7 +94,14 @@ where
         })
     }
 
-    fn try_transform_into(self, _state: &S) -> Result<(SokobanInput, Self::Post), Error> {
+    fn try_transform_into(self, state: &S) -> Result<(SokobanInput, Self::Post), Error> {
+        let metadata = state.metadata::<LastHallucinationMetadata>()?;
+
+        metadata.hallucination_mut().deref_mut().replace(
+            self.hallucinated
+                .expect("Contract violated; mutator failed to return hallucination."),
+        );
+
         Ok((SokobanInput::new(self.moves), ()))
     }
 }

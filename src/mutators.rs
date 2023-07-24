@@ -1,11 +1,12 @@
 use crate::input::HallucinatedSokobanInput;
 use crate::util;
-use crate::util::{opposite, push_to, POSSIBLE_MOVES};
+use crate::util::{find_crates, opposite, push_to, POSSIBLE_MOVES};
 use libafl::corpus::{Corpus, HasTestcase};
 use libafl::mutators::{MutationResult, Mutator, MutatorsTuple};
 use libafl::prelude::{MutationId, Named, Rand};
 use libafl::state::{HasCorpus, HasMaxSize, HasMetadata, HasRand};
 use libafl::{impl_serdeany, Error};
+use rand::seq::SliceRandom;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sokoban::{Direction, Tile};
@@ -67,7 +68,7 @@ where
 
         let current = input.hallucinated_mut().take().unwrap();
         if current.in_solution_state() {
-            // input.hallucinated_mut().replace(current);
+            input.hallucinated_mut().replace(current);
             return Ok(MutationResult::Skipped);
         }
 
@@ -80,7 +81,7 @@ where
             let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
             if remaining.moves_remaining.is_empty() {
-                // input.hallucinated_mut().replace(current);
+                input.hallucinated_mut().replace(current);
                 return Ok(MutationResult::Skipped);
             }
             let selector = selector % remaining.moves_remaining.len();
@@ -93,15 +94,16 @@ where
                 if current[potential] == Tile::Floor {
                     if let Some(destination) = opposite(direction).go(target) {
                         if let Some(moves) = util::go_to(current.player(), destination, &current) {
-                            // input.hallucinated_mut().replace(
-                            //     moves
-                            //         .iter()
-                            //         .copied()
-                            //         .try_fold(current, |current, direction| {
-                            //             current.move_player(direction)
-                            //         })
-                            //         .unwrap(),
-                            // );
+                            input.hallucinated_mut().replace(
+                                moves
+                                    .iter()
+                                    .copied()
+                                    .try_fold(current, |current, direction| {
+                                        current.move_player(direction)
+                                    })
+                                    .and_then(|current| current.move_player(direction))
+                                    .unwrap(),
+                            );
                             input.moves_mut().extend(moves);
                             input.moves_mut().push(direction);
                             return Ok(MutationResult::Mutated);
@@ -138,7 +140,7 @@ where
 
         let current = input.hallucinated_mut().take().unwrap();
         if current.in_solution_state() {
-            // input.hallucinated_mut().replace(current);
+            input.hallucinated_mut().replace(current);
             return Ok(MutationResult::Skipped);
         }
 
@@ -151,6 +153,7 @@ where
             let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
 
             if remaining.move_to_targets_remaining.is_empty() {
+                input.hallucinated_mut().replace(current);
                 return Ok(MutationResult::Skipped);
             }
             let selector = selector % remaining.move_to_targets_remaining.len();
@@ -164,17 +167,78 @@ where
             let (moved, target) = entry;
 
             if let Some(moves) = push_to(moved, target, &current) {
-                // input.hallucinated_mut().replace(
-                //     moves
-                //         .iter()
-                //         .copied()
-                //         .try_fold(current, |current, direction| current.move_player(direction))
-                //         .unwrap(),
-                // );
+                input.hallucinated_mut().replace(
+                    moves
+                        .iter()
+                        .copied()
+                        .try_fold(current, |current, direction| current.move_player(direction))
+                        .unwrap(),
+                );
                 input.moves_mut().extend(moves);
                 return Ok(MutationResult::Mutated);
             }
         }
+    }
+}
+
+pub struct OneShotMutator;
+
+impl Named for OneShotMutator {
+    fn name(&self) -> &str {
+        "move_many_crates_to_targets"
+    }
+}
+
+impl<S> Mutator<HallucinatedSokobanInput, S> for OneShotMutator
+where
+    S: HasCorpus + HasMaxSize + HasMetadata + HasRand + HasTestcase,
+    S::Rand: RngCore,
+{
+    fn mutate(
+        &mut self,
+        state: &mut S,
+        input: &mut HallucinatedSokobanInput,
+        _stage_idx: i32,
+    ) -> Result<MutationResult, Error> {
+        if state.max_size() <= input.moves().len() {
+            return Ok(MutationResult::Skipped);
+        }
+
+        let mut current = input.hallucinated_mut().take().unwrap();
+        if current.in_solution_state() {
+            input.hallucinated_mut().replace(current);
+            return Ok(MutationResult::Skipped);
+        }
+
+        let mut targets = current.targets().to_vec();
+        targets.shuffle(state.rand_mut());
+
+        let mut crates = find_crates(&current);
+        crates.shuffle(state.rand_mut());
+
+        let mut mutated = MutationResult::Skipped;
+
+        for (target, moved) in targets.into_iter().zip(crates) {
+            if let Some(moves) = push_to(moved, target, &current) {
+                current = moves
+                    .iter()
+                    .copied()
+                    .try_fold(current, |puzzle, direction| puzzle.move_player(direction))
+                    .unwrap();
+                input.moves_mut().extend(moves);
+                mutated = MutationResult::Mutated;
+            } else {
+                break;
+            }
+
+            if current.in_solution_state() {
+                break;
+            }
+        }
+
+        input.hallucinated_mut().replace(current);
+
+        Ok(mutated)
     }
 }
 

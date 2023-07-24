@@ -77,10 +77,12 @@ where
             }
         };
 
-        let next = state
-            .corpus()
-            .first()
-            .ok_or_else(|| Error::key_not_found("Missing corpus entry; is the corpus empty?"))?;
+        let next = state.corpus().first().ok_or_else(|| {
+            Error::key_not_found(format!(
+                "Missing corpus entry; is the corpus empty? Reported size: {}",
+                state.corpus().count()
+            ))
+        })?;
         self.set_current_scheduled(state, Some(next))?;
         Ok(next)
     }
