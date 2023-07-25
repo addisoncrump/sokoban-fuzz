@@ -1,17 +1,18 @@
 use crate::executor::SokobanExecutor;
 use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
 use crate::input::SokobanInput;
-use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator};
+use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, OneShotMutator};
 use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
 use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
+use libafl::corpus::HasTestcase;
+use libafl::prelude::SimpleMonitor;
 use libafl::{
     corpus::{Corpus, InMemoryCorpus},
     events::Event::{Objective, UpdateUserStats},
     events::{EventFirer, SimpleEventManager},
     feedbacks::NewHashFeedback,
     monitors::{
-        tui::{ui::TuiUI, TuiMonitor},
         Monitor,
         // MultiMonitor,
         UserStats,
@@ -81,8 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|s| u64::from_str(&s).ok())
         .unwrap_or(1);
 
-    let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
-    // let monitor = MultiMonitor::new(|s| println!("{s}"));
+    // let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
+    let monitor = SimpleMonitor::new(|_| {});
 
     let mut mgr = SimpleEventManager::new(monitor);
 
@@ -121,6 +122,8 @@ fn fuzz(
     level: u64,
     puzzle: SokobanState,
 ) -> Result<(), Error> {
+    println!("puzzle {level}: {puzzle:?}");
+
     let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
 
     let mut feedback = feedback_and_fast!(
@@ -155,11 +158,11 @@ fn fuzz(
         SokobanInput::new(Vec::new()),
     )?;
 
-    // let oneshot_stage = StdMutationalStage::transforming(OneShotMutator);
+    let oneshot_stage = StdMutationalStage::transforming(OneShotMutator);
     let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
     let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
 
-    let mut stages = tuple_list!(move_stage, move_to_target_stage);
+    let mut stages = tuple_list!(oneshot_stage, move_stage, move_to_target_stage);
 
     mgr.fire(
         &mut state,
@@ -174,6 +177,23 @@ fn fuzz(
     while state.solutions().is_empty() {
         fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr)?;
     }
+
+    let solution = state.solutions().first().unwrap();
+    let mut testcase = state.solutions().testcase_mut(solution)?;
+    let moves = testcase.load_input(state.solutions())?;
+
+    println!("moves: {:?}", moves.moves());
+
+    let solution = moves
+        .moves()
+        .iter()
+        .copied()
+        .try_fold(puzzle.clone(), |puzzle, direction| {
+            puzzle.move_player(direction)
+        })
+        .unwrap();
+
+    println!("solved: {solution:?}");
 
     Ok(())
 }
