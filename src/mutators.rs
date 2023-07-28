@@ -61,17 +61,16 @@ where
         input: &mut HallucinatedSokobanInput,
         _stage_idx: i32,
     ) -> Result<MutationResult, Error> {
+        let idx = state.corpus().current().unwrap();
+
         if state.max_size() <= input.moves().len() {
+            let mut testcase = state.testcase_mut(idx)?;
+            let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
+            remaining.moves_remaining.clear();
             return Ok(MutationResult::Skipped);
         }
 
         let current = input.hallucinated_mut().take().unwrap();
-        if current.in_solution_state() {
-            input.hallucinated_mut().replace(current);
-            return Ok(MutationResult::Skipped);
-        }
-
-        let idx = state.corpus().current().unwrap();
 
         loop {
             // get the available mutations
@@ -88,6 +87,11 @@ where
                 if current[potential] == Tile::Floor {
                     if let Some(destination) = opposite(direction).go(target) {
                         if let Some(moves) = util::go_to(current.player(), destination, &current) {
+                            if moves.len() + input.moves().len() > state.max_size() {
+                                input.hallucinated_mut().replace(current);
+                                return Ok(MutationResult::Skipped);
+                            }
+
                             input.hallucinated_mut().replace(
                                 moves
                                     .iter()
@@ -128,17 +132,16 @@ where
         input: &mut HallucinatedSokobanInput,
         _stage_idx: i32,
     ) -> Result<MutationResult, Error> {
+        let idx = state.corpus().current().unwrap();
+
         if state.max_size() <= input.moves().len() {
+            let mut testcase = state.testcase_mut(idx)?;
+            let remaining = testcase.metadata_mut::<SokobanRemainingMutationsMetadata>()?;
+            remaining.move_to_targets_remaining.clear();
             return Ok(MutationResult::Skipped);
         }
 
         let current = input.hallucinated_mut().take().unwrap();
-        if current.in_solution_state() {
-            input.hallucinated_mut().replace(current);
-            return Ok(MutationResult::Skipped);
-        }
-
-        let idx = state.corpus().current().unwrap();
 
         loop {
             // get the available mutations
@@ -152,6 +155,11 @@ where
             let (moved, target) = remaining.move_to_targets_remaining.pop().unwrap();
 
             if let Some(moves) = push_to(moved, target, &current) {
+                if moves.len() + input.moves().len() > state.max_size() {
+                    input.hallucinated_mut().replace(current);
+                    return Ok(MutationResult::Skipped);
+                }
+
                 input.hallucinated_mut().replace(
                     moves
                         .iter()
@@ -205,6 +213,10 @@ where
 
         for (target, moved) in targets.into_iter().zip(crates) {
             if let Some(moves) = push_to(moved, target, &current) {
+                if moves.len() + input.moves().len() > state.max_size() {
+                    break; // we may have already mutated the input
+                }
+
                 current = moves
                     .iter()
                     .copied()

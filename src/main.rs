@@ -6,7 +6,9 @@ use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
 use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
 use libafl::corpus::HasTestcase;
+use libafl::monitors::SimplePrintingMonitor;
 use libafl::prelude::SimpleMonitor;
+use libafl::state::{HasCorpus, HasMaxSize};
 use libafl::{
     corpus::{Corpus, InMemoryCorpus},
     events::Event::{Objective, UpdateUserStats},
@@ -84,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
     let monitor = SimpleMonitor::new(|_| {});
+    // let monitor = SimplePrintingMonitor::new();
 
     let mut mgr = SimpleEventManager::new(monitor);
 
@@ -175,14 +178,63 @@ fn fuzz(
     mgr.fire(&mut state, Objective { objective_size: 0 })?;
 
     while state.solutions().is_empty() {
-        fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr)?;
+        let _ = match fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr) {
+            Err(Error::KeyNotFound(s, _bt))
+                if !state.solutions().is_empty()
+                    && s.starts_with("Missing corpus entry; is the corpus empty?") =>
+            {
+                // we found a solution at the exact same time we cleared to zero corpus entries
+                break;
+            }
+            r => r?,
+        };
     }
 
-    let solution = state.solutions().first().unwrap();
-    let mut testcase = state.solutions().testcase_mut(solution)?;
+    let mut smallest_id = state.solutions().first().unwrap();
+    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
     let moves = testcase.load_input(state.solutions())?;
 
-    println!("moves: {:?}", moves.moves());
+    println!("first solution: {:?}", moves.moves());
+    drop(testcase);
+
+    let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
+    let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
+
+    // oneshot is no longer worthwhile, as it poisons our minimisation
+    let mut stages = tuple_list!(move_stage, move_to_target_stage);
+
+    loop {
+        let mut smallest_len = usize::MAX;
+        for id in state.solutions().ids() {
+            let mut testcase = state.solutions().testcase_mut(id)?;
+            let input = testcase.load_input(state.solutions())?;
+            if input.moves().len() < smallest_len {
+                smallest_len = input.moves().len();
+                smallest_id = id;
+            }
+        }
+
+        state.set_max_size(smallest_len);
+
+        if state.corpus().is_empty() {
+            break;
+        }
+
+        let _ = match fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr) {
+            Err(Error::KeyNotFound(s, _bt))
+                if s.starts_with("Missing corpus entry; is the corpus empty?") =>
+            {
+                // we found a solution at the exact same time we cleared to zero corpus entries
+                continue;
+            }
+            r => r?,
+        };
+    }
+
+    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
+    let moves = testcase.load_input(state.solutions())?;
+
+    println!("minimised: {:?}", moves.moves());
 
     let solution = moves
         .moves()
