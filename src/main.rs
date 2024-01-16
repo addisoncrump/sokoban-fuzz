@@ -195,8 +195,9 @@ fn fuzz(
     let moves = testcase.load_input(state.solutions())?;
 
     println!("first solution: {:?}", moves.moves());
-    drop(testcase);
+//    drop(testcase);
 
+    /*
     let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
     let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
 
@@ -230,11 +231,12 @@ fn fuzz(
             r => r?,
         };
     }
+    */
 
-    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
+//    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
     let moves = testcase.load_input(state.solutions())?;
 
-    println!("minimised: {:?}", moves.moves());
+//    println!("minimised: {:?}", moves.moves());
 
     let solution = moves
         .moves()
