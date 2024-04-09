@@ -6,24 +6,25 @@ use crate::observer::SokobanStateObserver;
 use crate::scheduler::SokobanWeightScheduler;
 use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
 use libafl::corpus::HasTestcase;
-use libafl::monitors::SimplePrintingMonitor;
-use libafl::prelude::SimpleMonitor;
-use libafl::state::{HasCorpus, HasMaxSize};
+
+use libafl::monitors::{AggregatorOps, UserStatsValue};
 use libafl::{
     corpus::{Corpus, InMemoryCorpus},
     events::Event::{Objective, UpdateUserStats},
     events::{EventFirer, SimpleEventManager},
+    feedback_and_fast,
     feedbacks::NewHashFeedback,
     monitors::{
         Monitor,
-        // MultiMonitor,
+        SimpleMonitor,
         UserStats,
     },
-    prelude::{feedback_and_fast, tuple_list, RandomSeed, RomuDuoJrRand, StdRand},
     stages::StdMutationalStage,
-    state::{HasMetadata, HasSolutions, StdState},
+    state::{HasCorpus, HasMaxSize, HasMetadata, HasSolutions, StdState},
     Error, Evaluator, Fuzzer, StdFuzzer,
 };
+use libafl_bolts::rands::{RandomSeed, RomuDuoJrRand, StdRand};
+use libafl_bolts::tuples::tuple_list;
 use serde::{Deserialize, Serialize};
 use serde_xml_rs::from_str;
 use sokoban::{State as SokobanState, Tile};
@@ -77,12 +78,17 @@ impl From<Response> for SokobanState {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seed = 0;
+    let seed = 1680382300;
 
     let initial = std::env::args()
         .nth(1)
         .and_then(|s| u64::from_str(&s).ok())
         .unwrap_or(1);
+
+    let end = std::env::args()
+        .nth(2)
+        .and_then(|s| u64::from_str(&s).ok())
+        .unwrap_or(initial);
 
     // let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
     let monitor = SimpleMonitor::new(|_| {});
@@ -90,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut mgr = SimpleEventManager::new(monitor);
 
-    for level in initial..=100 {
+    for level in initial..=end {
         let response: Response = from_str(
             &reqwest::blocking::get(format!(
                 "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
@@ -171,7 +177,7 @@ fn fuzz(
         &mut state,
         UpdateUserStats {
             name: "level".to_string(),
-            value: UserStats::Number(level),
+            value: UserStats::new(UserStatsValue::Number(level), AggregatorOps::Max),
             phantom: Default::default(),
         },
     )?;
@@ -195,9 +201,8 @@ fn fuzz(
     let moves = testcase.load_input(state.solutions())?;
 
     println!("first solution: {:?}", moves.moves());
-//    drop(testcase);
+    drop(testcase);
 
-    /*
     let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
     let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
 
@@ -231,12 +236,11 @@ fn fuzz(
             r => r?,
         };
     }
-    */
 
-//    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
+    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
     let moves = testcase.load_input(state.solutions())?;
 
-//    println!("minimised: {:?}", moves.moves());
+    println!("minimised: {:?}", moves.moves());
 
     let solution = moves
         .moves()

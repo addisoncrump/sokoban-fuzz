@@ -2,9 +2,8 @@ use crate::input::SokobanInput;
 use crate::observer::{SokobanObserversTuple, SokobanStateObserver};
 use crate::state::LastHallucinationMetadata;
 use libafl::executors::{Executor, ExitKind, HasObservers};
-use libafl::inputs::UsesInput;
 use libafl::observers::{ObserversTuple, UsesObservers};
-use libafl::state::{HasMetadata, UsesState};
+use libafl::state::{HasMetadata, State, UsesState};
 use libafl::Error;
 use sokoban::State as SokobanState;
 use std::fmt::Debug;
@@ -34,7 +33,7 @@ where
 
 impl<OT, S> UsesState for SokobanExecutor<OT, S>
 where
-    S: UsesInput<Input = SokobanInput>,
+    S: State<Input = SokobanInput>,
 {
     type State = S;
 }
@@ -43,7 +42,7 @@ impl<EM, OT, S, Z> Executor<EM, Z> for SokobanExecutor<OT, S>
 where
     EM: UsesState<State = Self::State>,
     OT: ObserversTuple<S> + SokobanObserversTuple + Debug,
-    S: UsesInput<Input = SokobanInput> + HasMetadata + Debug,
+    S: State<Input = SokobanInput> + HasMetadata + Debug,
     Z: UsesState<State = Self::State>,
 {
     fn run_target(
@@ -94,7 +93,7 @@ where
 impl<OT, S> UsesObservers for SokobanExecutor<OT, S>
 where
     OT: ObserversTuple<Self::State>,
-    S: UsesInput<Input = SokobanInput>,
+    S: State<Input = SokobanInput>,
 {
     type Observers = OT;
 }
@@ -102,7 +101,7 @@ where
 impl<OT, S> HasObservers for SokobanExecutor<OT, S>
 where
     OT: ObserversTuple<Self::State>,
-    S: UsesInput<Input = SokobanInput>,
+    S: State<Input = SokobanInput>,
 {
     fn observers(&self) -> &Self::Observers {
         &self.observers

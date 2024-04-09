@@ -1,8 +1,8 @@
 use crate::util::hash_sokoban_state;
 use libafl::inputs::UsesInput;
 use libafl::observers::{Observer, ObserverWithHashField};
-use libafl::prelude::Named;
 use libafl::Error;
+use libafl_bolts::Named;
 use serde::{Deserialize, Serialize};
 use sokoban::State as SokobanState;
 

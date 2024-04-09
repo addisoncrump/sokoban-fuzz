@@ -1,4 +1,4 @@
-use libafl::impl_serdeany;
+use libafl_bolts::impl_serdeany;
 use serde::{Deserialize, Serialize};
 use sokoban::State as SokobanState;
 use std::cell::{RefCell, RefMut};

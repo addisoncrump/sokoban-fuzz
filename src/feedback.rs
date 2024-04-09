@@ -4,12 +4,12 @@ use crate::util::find_crates;
 use libafl::events::{Event, EventFirer};
 use libafl::executors::ExitKind;
 use libafl::feedbacks::Feedback;
-use libafl::inputs::UsesInput;
-use libafl::monitors::UserStats;
+use libafl::monitors::{UserStats, UserStatsValue};
 use libafl::observers::ObserversTuple;
-use libafl::prelude::Named;
-use libafl::state::HasClientPerfMonitor;
+use libafl::prelude::AggregatorOps;
+use libafl::state::State;
 use libafl::Error;
+use libafl_bolts::Named;
 use sokoban::Direction::{Down, Left, Right, Up};
 use sokoban::Tile;
 
@@ -36,7 +36,7 @@ impl Named for SokobanSolvedFeedback {
 
 impl<S> Feedback<S> for SokobanSolvedFeedback
 where
-    S: UsesInput + HasClientPerfMonitor,
+    S: State,
 {
     fn is_interesting<EM, OT>(
         &mut self,
@@ -85,7 +85,7 @@ impl Named for SokobanSolvableFeedback {
 
 impl<S> Feedback<S> for SokobanSolvableFeedback
 where
-    S: UsesInput + HasClientPerfMonitor,
+    S: State,
 {
     fn is_interesting<EM, OT>(
         &mut self,
@@ -172,7 +172,7 @@ impl Named for SokobanStatisticsFeedback {
 
 impl<S> Feedback<S> for SokobanStatisticsFeedback
 where
-    S: UsesInput<Input = SokobanInput> + HasClientPerfMonitor,
+    S: State<Input = SokobanInput>,
 {
     fn is_interesting<EM, OT>(
         &mut self,
@@ -201,7 +201,13 @@ where
                     state,
                     Event::UpdateUserStats {
                         name: "most_set".to_string(),
-                        value: UserStats::Ratio(most_set as u64, last_state.targets().len() as u64),
+                        value: UserStats::new(
+                            UserStatsValue::Ratio(
+                                most_set as u64,
+                                last_state.targets().len() as u64,
+                            ),
+                            AggregatorOps::Max,
+                        ),
                         phantom: Default::default(),
                     },
                 )?;
@@ -212,7 +218,10 @@ where
                     state,
                     Event::UpdateUserStats {
                         name: "most_moves".to_string(),
-                        value: UserStats::Number(input.moves().len() as u64),
+                        value: UserStats::new(
+                            UserStatsValue::Number(input.moves().len() as u64),
+                            AggregatorOps::Max,
+                        ),
                         phantom: Default::default(),
                     },
                 )?;

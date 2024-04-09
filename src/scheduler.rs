@@ -1,14 +1,15 @@
+use std::marker::PhantomData;
+
+use libafl::corpus::{Corpus, CorpusId, HasTestcase};
+use libafl::schedulers::Scheduler;
+use libafl::state::{HasCorpus, State, UsesState};
+use libafl::state::{HasMetadata, HasRand};
+use libafl::Error;
+
 use crate::input::SokobanInput;
 use crate::mutators::SokobanRemainingMutationsMetadata;
 use crate::state::InitialPuzzleMetadata;
 use crate::util::find_crates;
-use libafl::corpus::{Corpus, CorpusId, HasTestcase};
-use libafl::inputs::UsesInput;
-use libafl::schedulers::Scheduler;
-use libafl::state::{HasCorpus, UsesState};
-use libafl::state::{HasMetadata, HasRand};
-use libafl::Error;
-use std::marker::PhantomData;
 
 pub struct SokobanWeightScheduler<S> {
     phantom: PhantomData<S>,
@@ -27,14 +28,14 @@ where
 
 impl<S> UsesState for SokobanWeightScheduler<S>
 where
-    S: UsesInput,
+    S: State,
 {
     type State = S;
 }
 
 impl<S> Scheduler for SokobanWeightScheduler<S>
 where
-    S: HasCorpus<Input = SokobanInput> + HasMetadata + HasRand + HasTestcase,
+    S: State<Input = SokobanInput> + HasCorpus + HasMetadata + HasRand + HasTestcase,
 {
     fn on_add(&mut self, state: &mut Self::State, idx: CorpusId) -> Result<(), Error> {
         let mut testcase = state.testcase_mut(idx)?;
