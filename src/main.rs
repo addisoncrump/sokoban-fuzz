@@ -1,12 +1,8 @@
-use crate::executor::SokobanExecutor;
-use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
-use crate::input::SokobanInput;
-use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, OneShotMutator};
-use crate::observer::SokobanStateObserver;
-use crate::scheduler::SokobanWeightScheduler;
-use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
-use libafl::corpus::HasTestcase;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::str::FromStr;
 
+use libafl::corpus::HasTestcase;
 use libafl::monitors::{AggregatorOps, UserStatsValue};
 use libafl::{
     corpus::{Corpus, InMemoryCorpus},
@@ -14,11 +10,7 @@ use libafl::{
     events::{EventFirer, SimpleEventManager},
     feedback_and_fast,
     feedbacks::NewHashFeedback,
-    monitors::{
-        Monitor,
-        SimpleMonitor,
-        UserStats,
-    },
+    monitors::{Monitor, SimpleMonitor, UserStats},
     stages::StdMutationalStage,
     state::{HasCorpus, HasMaxSize, HasMetadata, HasSolutions, StdState},
     Error, Evaluator, Fuzzer, StdFuzzer,
@@ -26,9 +18,15 @@ use libafl::{
 use libafl_bolts::rands::{RandomSeed, RomuDuoJrRand, StdRand};
 use libafl_bolts::tuples::tuple_list;
 use serde::{Deserialize, Serialize};
-use serde_xml_rs::from_str;
 use sokoban::{State as SokobanState, Tile};
-use std::str::FromStr;
+
+use crate::executor::SokobanExecutor;
+use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
+use crate::input::SokobanInput;
+use crate::mutators::{MoveCrateMutator, MoveCrateToTargetMutator, OneShotMutator};
+use crate::observer::SokobanStateObserver;
+use crate::scheduler::SokobanWeightScheduler;
+use crate::state::{InitialPuzzleMetadata, LastHallucinationMetadata};
 
 mod executor;
 mod feedback;
@@ -77,9 +75,61 @@ impl From<Response> for SokobanState {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seed = 1680382300;
+fn parse_file(file: File) -> Result<SokobanState, std::io::Error> {
+    let reader = BufReader::new(file);
 
+    let mut dim_c = 0;
+    let mut dim_r = 0;
+
+    let mut rows = Vec::new();
+
+    for line in reader.lines() {
+        dim_r += 1;
+        let line = line?.into_bytes();
+        dim_c = dim_c.max(line.len());
+        rows.push(line);
+    }
+
+    for row in &mut rows {
+        let needed = dim_c - row.len();
+        row.extend(std::iter::repeat(b' ').take(needed));
+    }
+
+    let raw = rows.into_iter().flatten().collect::<Vec<_>>();
+
+    let container = raw
+        .iter()
+        .copied()
+        .map(|b| match b {
+            b' ' | b'@' | b'.' => Tile::Floor,
+            b'#' => Tile::Wall,
+            b'$' => Tile::Crate,
+            _ => unreachable!("Illegal value in response."),
+        })
+        .collect::<Vec<_>>();
+
+    let player = raw
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|&(_, c)| c == b'@')
+        .expect("Couldn't find the player")
+        .0;
+    let player = (player / dim_c, player % dim_c);
+
+    let targets = raw
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(i, c)| (c == b'.').then_some(i))
+        .map(|i| (i / dim_c, i % dim_c))
+        .collect::<Vec<_>>();
+
+    Ok(SokobanState::new(container, player, targets, dim_r, dim_c)
+        .expect("Expected a valid state from file"))
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let initial = std::env::args()
         .nth(1)
         .and_then(|s| u64::from_str(&s).ok())
@@ -97,15 +147,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mgr = SimpleEventManager::new(monitor);
 
     for level in initial..=end {
-        let response: Response = from_str(
-            &reqwest::blocking::get(format!(
-                "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
-                seed, level
-            ))?
-            .text()?,
-        )?;
+        // let response: Response = from_str(
+        //     &reqwest::blocking::get(format!(
+        //         "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
+        //         seed, level
+        //     ))?
+        //     .text()?,
+        // )?;
+        //
+        // let puzzle = SokobanState::from(response);
 
-        let puzzle = SokobanState::from(response);
+        let puzzle = parse_file(File::open(format!("puzzles/screen.{level}"))?)?;
 
         if let Err(e) = fuzz(&mut mgr, level, puzzle) {
             eprintln!("{e}");
@@ -201,47 +253,47 @@ fn fuzz(
     let moves = testcase.load_input(state.solutions())?;
 
     println!("first solution: {:?}", moves.moves());
-    drop(testcase);
+    /*    drop(testcase);
 
-    let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
-    let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
+        let move_stage = StdMutationalStage::transforming(MoveCrateMutator);
+        let move_to_target_stage = StdMutationalStage::transforming(MoveCrateToTargetMutator);
 
-    // oneshot is no longer worthwhile, as it poisons our minimisation
-    let mut stages = tuple_list!(move_stage, move_to_target_stage);
+        // oneshot is no longer worthwhile, as it poisons our minimisation
+        let mut stages = tuple_list!(move_stage, move_to_target_stage);
 
-    loop {
-        let mut smallest_len = usize::MAX;
-        for id in state.solutions().ids() {
-            let mut testcase = state.solutions().testcase_mut(id)?;
-            let input = testcase.load_input(state.solutions())?;
-            if input.moves().len() < smallest_len {
-                smallest_len = input.moves().len();
-                smallest_id = id;
+        loop {
+            let mut smallest_len = usize::MAX;
+            for id in state.solutions().ids() {
+                let mut testcase = state.solutions().testcase_mut(id)?;
+                let input = testcase.load_input(state.solutions())?;
+                if input.moves().len() < smallest_len {
+                    smallest_len = input.moves().len();
+                    smallest_id = id;
+                }
             }
+
+            state.set_max_size(smallest_len);
+
+            if state.corpus().is_empty() {
+                break;
+            }
+
+            let _ = match fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr) {
+                Err(Error::KeyNotFound(s, _bt))
+                    if s.starts_with("Missing corpus entry; is the corpus empty?") =>
+                {
+                    // we found a solution at the exact same time we cleared to zero corpus entries
+                    continue;
+                }
+                r => r?,
+            };
         }
 
-        state.set_max_size(smallest_len);
+        let mut testcase = state.solutions().testcase_mut(smallest_id)?;
+        let moves = testcase.load_input(state.solutions())?;
 
-        if state.corpus().is_empty() {
-            break;
-        }
-
-        let _ = match fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr) {
-            Err(Error::KeyNotFound(s, _bt))
-                if s.starts_with("Missing corpus entry; is the corpus empty?") =>
-            {
-                // we found a solution at the exact same time we cleared to zero corpus entries
-                continue;
-            }
-            r => r?,
-        };
-    }
-
-    let mut testcase = state.solutions().testcase_mut(smallest_id)?;
-    let moves = testcase.load_input(state.solutions())?;
-
-    println!("minimised: {:?}", moves.moves());
-
+        println!("minimised: {:?}", moves.moves());
+    */
     let solution = moves
         .moves()
         .iter()
