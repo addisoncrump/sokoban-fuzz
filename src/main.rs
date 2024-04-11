@@ -130,6 +130,8 @@ fn parse_file(file: File) -> Result<SokobanState, std::io::Error> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let seed = 1680382300;
+
     let initial = std::env::args()
         .nth(1)
         .and_then(|s| u64::from_str(&s).ok())
@@ -147,17 +149,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mgr = SimpleEventManager::new(monitor);
 
     for level in initial..=end {
-        // let response: Response = from_str(
-        //     &reqwest::blocking::get(format!(
-        //         "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
-        //         seed, level
-        //     ))?
-        //     .text()?,
-        // )?;
-        //
-        // let puzzle = SokobanState::from(response);
+        let response: Response = serde_xml_rs::from_str(
+            &reqwest::blocking::get(format!(
+                "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
+                seed, level
+            ))?
+            .text()?,
+        )?;
 
-        let puzzle = parse_file(File::open(format!("puzzles/screen.{level}"))?)?;
+        let puzzle = SokobanState::from(response);
+
+        // let puzzle = parse_file(File::open(format!("puzzles/screen.{level}"))?)?;
 
         if let Err(e) = fuzz(&mut mgr, level, puzzle) {
             eprintln!("{e}");
