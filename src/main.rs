@@ -1,9 +1,6 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::str::FromStr;
-
 use libafl::corpus::HasTestcase;
-use libafl::monitors::{AggregatorOps, UserStatsValue};
+use libafl::monitors::{AggregatorOps, SimplePrintingMonitor, UserStatsValue};
+use libafl::state::HasExecutions;
 use libafl::{
     corpus::{Corpus, InMemoryCorpus},
     events::Event::{Objective, UpdateUserStats},
@@ -19,6 +16,13 @@ use libafl_bolts::rands::{RandomSeed, RomuDuoJrRand, StdRand};
 use libafl_bolts::tuples::tuple_list;
 use serde::{Deserialize, Serialize};
 use sokoban::{State as SokobanState, Tile};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::str::FromStr;
+use std::time::Duration;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::tungstenite::{connect, ClientRequestBuilder, Message, Utf8Bytes};
 
 use crate::executor::SokobanExecutor;
 use crate::feedback::{SokobanSolvableFeedback, SokobanSolvedFeedback, SokobanStatisticsFeedback};
@@ -130,43 +134,16 @@ fn parse_file(file: File) -> Result<SokobanState, std::io::Error> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seed = 1680382300;
-
-    let initial = std::env::args()
-        .nth(1)
-        .and_then(|s| u64::from_str(&s).ok())
-        .unwrap_or(1);
-
-    let end = std::env::args()
-        .nth(2)
-        .and_then(|s| u64::from_str(&s).ok())
-        .unwrap_or(initial);
+    let puzzle = reqwest::blocking::get("https://39c3.addisoncrump.info/sokoban/initial")?
+        .json::<SokobanState>()?;
 
     // let monitor = TuiMonitor::new(TuiUI::new("sokoban-fuzz".to_string(), true));
-    let monitor = SimpleMonitor::new(|_| {});
-    // let monitor = SimplePrintingMonitor::new();
+    // let monitor = SimpleMonitor::new(|_| {});
+    let monitor = SimplePrintingMonitor::new();
 
     let mut mgr = SimpleEventManager::new(monitor);
 
-    for level in initial..=end {
-        let response: Response = serde_xml_rs::from_str(
-            &reqwest::blocking::get(format!(
-                "http://www.linusakesson.net/games/autosokoban/board.php?v=1&seed={}&level={}",
-                seed, level
-            ))?
-            .text()?,
-        )?;
-
-        let puzzle = SokobanState::from(response);
-
-        // let puzzle = parse_file(File::open(format!("puzzles/screen.{level}"))?)?;
-
-        if let Err(e) = fuzz(&mut mgr, level, puzzle) {
-            eprintln!("{e}");
-            return Ok(());
-        }
-    }
-
+    fuzz(&mut mgr, puzzle)?;
     Ok(())
 }
 
@@ -180,13 +157,8 @@ type SokobanManager<M> = SimpleEventManager<
     >,
 >;
 
-fn fuzz(
-    mgr: &mut SokobanManager<impl Monitor>,
-    level: u64,
-    puzzle: SokobanState,
-) -> Result<(), Error> {
-    println!("puzzle {level}: {puzzle:?}");
-
+fn fuzz(mgr: &mut SokobanManager<impl Monitor>, puzzle: SokobanState) -> Result<(), Error> {
+    let (mut ws, _) = connect("wss://39c3.addisoncrump.info/sokoban/play").unwrap();
     let sokoban_obs = SokobanStateObserver::new("sokoban_state", true);
 
     let mut feedback = feedback_and_fast!(
@@ -227,16 +199,9 @@ fn fuzz(
 
     let mut stages = tuple_list!(oneshot_stage, move_stage, move_to_target_stage);
 
-    mgr.fire(
-        &mut state,
-        UpdateUserStats {
-            name: "level".to_string(),
-            value: UserStats::new(UserStatsValue::Number(level), AggregatorOps::Max),
-            phantom: Default::default(),
-        },
-    )?;
     mgr.fire(&mut state, Objective { objective_size: 0 })?;
 
+    let mut last_executions = 0;
     while state.solutions().is_empty() {
         let _ = match fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, mgr) {
             Err(Error::KeyNotFound(s, _bt))
@@ -248,6 +213,20 @@ fn fuzz(
             }
             r => r?,
         };
+        if *state.executions() > last_executions + 5_000 {
+            last_executions = *state.executions();
+            let last_input = state
+                .corpus()
+                .get(state.corpus().last().unwrap())?
+                .borrow()
+                .input()
+                .clone()
+                .unwrap();
+            ws.send(Message::Text(Utf8Bytes::from(serde_json::to_string(
+                &last_input.moves(),
+            )?)))
+            .unwrap();
+        }
     }
 
     let mut smallest_id = state.solutions().first().unwrap();
@@ -304,8 +283,13 @@ fn fuzz(
             puzzle.move_player(direction)
         })
         .unwrap();
+    ws.send(Message::Text(Utf8Bytes::from(serde_json::to_string(
+        &moves.moves(),
+    )?)))
+    .unwrap();
 
     println!("solved: {solution:?}");
+    std::thread::sleep(Duration::from_secs(15));
 
     Ok(())
 }

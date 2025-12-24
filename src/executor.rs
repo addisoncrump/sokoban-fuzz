@@ -3,7 +3,7 @@ use crate::observer::{SokobanObserversTuple, SokobanStateObserver};
 use crate::state::LastHallucinationMetadata;
 use libafl::executors::{Executor, ExitKind, HasObservers};
 use libafl::observers::{ObserversTuple, UsesObservers};
-use libafl::state::{HasMetadata, State, UsesState};
+use libafl::state::{HasExecutions, HasMetadata, State, UsesState};
 use libafl::Error;
 use sokoban::State as SokobanState;
 use std::fmt::Debug;
@@ -42,7 +42,7 @@ impl<EM, OT, S, Z> Executor<EM, Z> for SokobanExecutor<OT, S>
 where
     EM: UsesState<State = Self::State>,
     OT: ObserversTuple<S> + SokobanObserversTuple + Debug,
-    S: State<Input = SokobanInput> + HasMetadata + Debug,
+    S: State<Input = SokobanInput> + HasMetadata + HasExecutions + Debug,
     Z: UsesState<State = Self::State>,
 {
     fn run_target(
@@ -56,6 +56,8 @@ where
             .metadata_mut::<LastHallucinationMetadata>()
             .ok()
             .and_then(|metadata| metadata.hallucination_mut().take());
+
+        *state.executions_mut() += 1;
 
         #[cfg(debug_assertions)]
         if let Some(hallucinated) = hallucinated.as_ref() {
