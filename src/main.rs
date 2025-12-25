@@ -213,7 +213,7 @@ fn fuzz(mgr: &mut SokobanManager<impl Monitor>, puzzle: SokobanState) -> Result<
             }
             r => r?,
         };
-        if *state.executions() > last_executions + 5_000 {
+        if *state.executions() > last_executions + 500 {
             last_executions = *state.executions();
             let last_input = state
                 .corpus()
@@ -289,7 +289,16 @@ fn fuzz(mgr: &mut SokobanManager<impl Monitor>, puzzle: SokobanState) -> Result<
     .unwrap();
 
     println!("solved: {solution:?}");
-    std::thread::sleep(Duration::from_secs(15));
+    std::thread::sleep(Duration::from_secs(5));
+
+    for i in 0..=moves.moves().len() {
+        ws.send(Message::Text(Utf8Bytes::from(serde_json::to_string(
+            &moves.moves()[..i],
+        )?)))
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    std::thread::sleep(Duration::from_secs(5));
 
     Ok(())
 }
